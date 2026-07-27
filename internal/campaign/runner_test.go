@@ -69,6 +69,28 @@ func TestRunnerCancellationDrainsAsUnprocessed(t *testing.T) {
 	}
 }
 
+func TestRunnerCancellationResponseIncludesBlockedSourceRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	const blocked = 25 * time.Millisecond
+	reads := 0
+	next := func() (SourceRecord, bool, error) {
+		reads++
+		if reads > 1 {
+			return SourceRecord{}, false, nil
+		}
+		cancel()
+		<-time.After(blocked)
+		return SourceRecord{Ordinal: 1, Email: "a@example.com"}, true, nil
+	}
+
+	report := Run(ctx, next, RunConfig{Workers: 1})
+
+	if !report.Cancelled || report.MeasuredResponse < blocked {
+		t.Fatalf("cancelled=%t measured response=%s want at least %s", report.Cancelled, report.MeasuredResponse, blocked)
+	}
+}
+
 func TestRunnerEmptyFails(t *testing.T) {
 	report := Run(context.Background(), SliceSource(nil), RunConfig{Workers: 1})
 	if report.Outcome != Failure || report.Counts != (Counts{}) {

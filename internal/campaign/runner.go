@@ -47,6 +47,7 @@ func Run(ctx context.Context, next NextFunc, cfg RunConfig) RunReport {
 	inputDone := false
 	admissionOpen := true
 	var cancelAt, deadline time.Time
+	lastCancellationCheck := time.Now()
 
 	for !inputDone || len(queue) > 0 || len(active) > 0 {
 		if ctx.Err() != nil && !report.Cancelled {
@@ -54,9 +55,11 @@ func Run(ctx context.Context, next NextFunc, cfg RunConfig) RunReport {
 			cancelAt = time.Now()
 			admissionOpen = false
 			deadline = cancelAt.Add(cfg.Settlement)
-			report.MeasuredResponse = time.Since(cancelAt)
+			report.MeasuredResponse = time.Since(lastCancellationCheck)
 			report.Counts.Unprocessed += int64(len(queue))
 			queue = queue[:0]
+		} else {
+			lastCancellationCheck = time.Now()
 		}
 		if !deadline.IsZero() && time.Now().After(deadline) && len(active) > 0 {
 			stopWorkers()
