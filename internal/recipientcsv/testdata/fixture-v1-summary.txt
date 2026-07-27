@@ -1,0 +1,5 @@
+algorithm=v1
+seed=7
+count=4
+named=2
+fallback=2

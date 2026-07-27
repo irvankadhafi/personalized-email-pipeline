@@ -1,0 +1,7 @@
+FROM golang:1.26.5-bookworm
+
+WORKDIR /workspace
+COPY . .
+RUN go build -trimpath -o /usr/local/bin/email-pipeline ./cmd/email-pipeline
+
+ENTRYPOINT ["email-pipeline"]

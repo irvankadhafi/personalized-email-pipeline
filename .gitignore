@@ -12,6 +12,9 @@ coverage.out
 # Local runtime data
 data/
 tmp/
+assessment-*.csv
+benchmark-*.json
+privacy-canary-*
 
 # IDE and OS metadata
 .idea/
