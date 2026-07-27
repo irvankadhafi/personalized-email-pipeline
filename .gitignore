@@ -17,3 +17,8 @@ tmp/
 .idea/
 .vscode/
 .DS_Store
+
+# Local agent and code-analysis state
+.code-review-graph/
+.codegraph
+.omo/
