@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -128,46 +129,113 @@ func TestRunnerFatalInputSettlesActiveWork(t *testing.T) {
 }
 
 func TestRunnerFatalInputRestartsCancellationSettlement(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	started := make(chan struct{})
-	cancelled := make(chan struct{})
-	release := make(chan struct{})
-	reads := 0
-	next := func() (SourceRecord, bool, error) {
-		reads++
-		switch reads {
-		case 1:
-			return SourceRecord{Ordinal: 1, Email: "a@example.com"}, true, nil
-		case 2:
-			return SourceRecord{Ordinal: 2, Email: "b@example.com"}, true, nil
-		case 3:
-			<-started
-			cancel()
-			close(cancelled)
-			return SourceRecord{Ordinal: 3, Email: "c@example.com"}, true, nil
-		default:
-			time.Sleep(50 * time.Millisecond)
-			return SourceRecord{}, false, errors.New("private source detail")
-		}
+	for _, tc := range []struct {
+		name         string
+		releaseAfter time.Duration
+		want         Counts
+		wantOutcome  Outcome
+		wantAccepted bool
+	}{
+		{
+			name:         "after original deadline before restarted deadline",
+			releaseAfter: 125 * time.Millisecond,
+			want:         Counts{Examined: 3, Eligible: 3, Completed: 1, Unprocessed: 2},
+			wantOutcome:  Failure,
+			wantAccepted: true,
+		},
+		{
+			name:         "after restarted deadline",
+			releaseAfter: 200 * time.Millisecond,
+			want:         Counts{Examined: 3, Eligible: 3, Failed: 1, Unprocessed: 2},
+			wantOutcome:  Failure,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				inputCtx := cancellationErrContext{Context: ctx}
+				started := make(chan struct{})
+				cancelled := make(chan struct{})
+				release := make(chan struct{})
+				accepted := make(chan struct{})
+				interrupted := make(chan struct{})
+				helperDone := make(chan struct{})
+				reads := 0
+				next := func() (SourceRecord, bool, error) {
+					reads++
+					switch reads {
+					case 1:
+						return SourceRecord{Ordinal: 1, Email: "a@example.com"}, true, nil
+					case 2:
+						return SourceRecord{Ordinal: 2, Email: "b@example.com"}, true, nil
+					case 3:
+						<-started
+						cancel()
+						close(cancelled)
+						return SourceRecord{Ordinal: 3, Email: "c@example.com"}, true, nil
+					default:
+						time.Sleep(50 * time.Millisecond)
+						return SourceRecord{}, false, errors.New("private source detail")
+					}
+				}
+				sink := func(ctx context.Context, _ []byte) error {
+					close(started)
+					select {
+					case <-release:
+						close(accepted)
+						return nil
+					case <-ctx.Done():
+						close(interrupted)
+						return ctx.Err()
+					}
+				}
+				go func() {
+					defer close(helperDone)
+					<-cancelled
+					time.Sleep(tc.releaseAfter)
+					close(release)
+				}()
+
+				report := Run(inputCtx, next, RunConfig{Workers: 1, Settlement: 100 * time.Millisecond, Sink: sink})
+				<-helperDone
+				if report.Outcome != tc.wantOutcome || !report.Fatal || !report.Cancelled || report.AccountingScope != "prefix_only" {
+					t.Fatalf("report=%#v", report)
+				}
+				if report.Counts != tc.want || report.Started != 1 || report.Counts.Validate() != nil {
+					t.Fatalf("counts=%#v want=%#v started=%d", report.Counts, tc.want, report.Started)
+				}
+				if tc.wantAccepted {
+					select {
+					case <-accepted:
+					default:
+						t.Fatal("sink was not accepted before settlement")
+					}
+					select {
+					case <-interrupted:
+						t.Fatal("accepted sink was interrupted")
+					default:
+					}
+				} else {
+					select {
+					case <-interrupted:
+					case <-accepted:
+						t.Fatal("sink was accepted after restarted deadline")
+					default:
+						t.Fatal("sink was neither accepted nor interrupted")
+					}
+				}
+			})
+		})
 	}
-	sink := func(context.Context, []byte) error {
-		close(started)
-		<-release
-		return nil
-	}
-	go func() {
-		<-cancelled
-		time.Sleep(125 * time.Millisecond)
-		close(release)
-	}()
-	report := Run(ctx, next, RunConfig{Workers: 1, Settlement: 100 * time.Millisecond, Sink: sink})
-	if report.Outcome != Failure || !report.Fatal || !report.Cancelled {
-		t.Fatalf("report=%#v", report)
-	}
-	want := Counts{Examined: 3, Eligible: 3, Completed: 1, Unprocessed: 2}
-	if report.Counts != want || report.Started != 1 {
-		t.Fatalf("counts=%#v want=%#v started=%d", report.Counts, want, report.Started)
-	}
+}
+
+type cancellationErrContext struct {
+	context.Context
+}
+
+func (cancellationErrContext) Done() <-chan struct{} {
+	return nil
 }
 
 func uniqueEmail(i int) string {
