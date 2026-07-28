@@ -33,7 +33,7 @@ func workerCommand(args []string, _ io.Writer, stderr io.Writer) int {
 		if err != nil {
 			return staticError(stderr, "guard_refused")
 		}
-		deliver, queue = smtp.Deliver, distributed.TaskTypeTestInbox
+		deliver, queue = smtp.DeliverMessage, distributed.TaskTypeTestInbox
 	}
 	redisCfg, err := redisConfigFromEnvironment()
 	if err != nil {
