@@ -14,6 +14,7 @@ A recipient is complete only after the full personalized message has been render
 - [Processing, safety, and privacy](#processing-safety-and-privacy)
 - [Outcomes and accounting](#outcomes-and-accounting)
 - [One-million-record proof](#one-million-record-proof)
+- [Bounded local evaluator](#bounded-local-evaluator)
 - [Optional execution modes](#optional-execution-modes)
 - [Test strategy and evidence](#test-strategy-and-evidence)
 - [AI-assisted development](#ai-assisted-development)
@@ -99,7 +100,7 @@ Recreate and process it:
 
 ```sh
 bin/email-pipeline generate --output proof.csv --count 4 --seed 7
-bin/email-pipeline run --input proof.csv --workers 2
+bin/email-pipeline run --input proof.csv --workers 2 --format=text
 ```
 
 The generation report states that the fixture has two named and two fallback records:
@@ -142,6 +143,39 @@ Hello Customer 000001,
 
 Exclusive offer: save 20% on your next purchase.
 ```
+
+## Bounded local evaluator
+
+The CLI benchmark remains the authoritative one-million-record proof. For a small interactive check of the same local execution path, start the bounded evaluator:
+
+```sh
+bin/email-pipeline web --listen 127.0.0.1:8080
+```
+
+The listener accepts only literal loopback IP addresses. The page has exactly four controls:
+
+- `count`: 1 through 1,000,000, default 100000.
+- `seed`: an unsigned 64-bit integer, default 7.
+- `workers`: 1 through the machine's reported logical CPU count, default that count.
+- `format`: `text` or `html`, default `text`.
+
+For a quick acceptance run, submit count 4, seed 7, any valid worker count, and text. The deterministic fixture produces two named and two fallback records, so the completed report includes evidence for both personalization branches.
+
+Each run creates `recipientcsv.NewGeneratedSource` with fixture algorithm `v1`, then runs the local campaign path with its in-memory SHA-256 digest sink. Every eligible record is rendered and digested in the selected format before it counts as completed. Text keeps the established message bytes exactly. HTML uses the same subject, greeting choice, personalization, and promotion wording with inert presentation.
+
+The fixed `Customer 000001` preview does not depend on controls or past runs. Text shows the exact message bytes. HTML shows a sandboxed rendered preview and escaped source from the same generated message. The HTML representation contains no evaluator input, scripts, forms, remote assets, or active external links.
+
+> Synthetic demonstration only. Uses deterministic .test recipients and an in-memory digest sink. No email is sent, no recipient data is accepted, and SMTP, Redis, Asynq, and the distributed ledger are not initialized. Use the CLI benchmark for authoritative one-million-record evidence.
+
+The page accepts no recipient upload or recipient fields, message or subject content, arbitrary HTML, transport settings, backend selection, or queue controls. Previewing, validation, execution, cancellation, and reporting stay on the local service-free path. Only one evaluator run is active at once, and a second valid submission receives an immediate `429 Too Many Requests` response without queuing, replacing, or cancelling the active run.
+
+The page works as an ordinary full-page form without JavaScript. With its locally served HTMX asset, it replaces only the result region. Invalid input returns safe field-specific `400 Bad Request` output. Browser cross-site form submissions are rejected before validation, admission, cancellation, or campaign work; same-origin browser requests and headerless local clients remain supported. An enhanced cancellation request owns its active run; a missing, stale, or non-applicable run receives `409 Conflict` and cannot affect another run. Without HTMX, navigation away or request disconnection cancels the associated run instead of leaving it running unseen. Completed reports, including `success`, `partial_success`, `failure`, and `interrupted`, remain readable in full-page, HTMX, and explicit text responses.
+
+The result labels campaign-processing elapsed time separately from total server-request duration. Request duration starts after successful validation, includes serialization of the final response representation, ends when the response data is ready, and excludes browser rendering and network transfer. Browser values are machine-specific interactive evidence. Use the CLI one-million-record procedure for authoritative benchmark evidence.
+
+For `Accept: text/plain` on `POST /evaluate`, the body is the compact campaign report followed by exactly one newline. It does not contain format or page timing fields. The selected format is sent in `X-Evaluator-Format`; total server-request duration is sent in `Server-Timing` as `request;dur=...`. Results use `Cache-Control: no-store`.
+
+The exact upstream HTMX 2.0.4 distribution is embedded and served as `/assets/htmx-2.0.4.min.js`; its SHA-256 is `e209dda5c8235479f3166defc7750e1dbcd5a5c1808b7792fc2e6733768fb447`. Its Zero-Clause BSD license is available at `/assets/htmx-LICENSE.txt`.
 
 ## Input contract
 
@@ -233,6 +267,8 @@ These modes are supporting demonstrations. They are not needed to build, test, o
 
 `run` independently selects an execution backend and message sink. Omitted selectors are `--backend=local --sink=dry-run`.
 
+Message rendering uses the typed `--format=text|html` selector. Omitted format is text, and explicit `--format=text` is compatible with the existing text path. The guarded test-inbox mode uses the selected representation's MIME type per message, `text/plain` or `text/html`, without changing its delivery safeguards.
+
 | Backend | Sink | Input | External service |
 |---|---|---|---|
 | `local` | `dry-run` | Supplied CSV | None |
@@ -254,7 +290,7 @@ export EMAIL_PIPELINE_TEST_ALLOWLIST=inbox@example.test
 # export EMAIL_PIPELINE_SMTP_CA_FILE=/path/to/test-ca.pem
 
 bin/email-pipeline run --backend=local --sink=test-inbox \
-  --count=2 --seed=7 --confirm-test-inbox=SEND_SYNTHETIC_TEST
+  --count=2 --seed=7 --format=text --confirm-test-inbox=SEND_SYNTHETIC_TEST
 ```
 
 Distributed runs require standalone Redis and a separately started sink-specific worker:
@@ -271,18 +307,20 @@ bin/email-pipeline worker --sink=dry-run --concurrency=4
 
 # terminal 2
 bin/email-pipeline run --backend=asynq --sink=dry-run \
-  --count=10000 --seed=7 --task-size=100
+  --count=10000 --seed=7 --format=text --task-size=100
 ```
 
 For distributed test-inbox delivery, configure both Redis and SMTP, start `worker --sink=test-inbox`, and run:
 
 ```sh
 bin/email-pipeline run --backend=asynq --sink=test-inbox \
-  --count=2 --seed=7 --task-size=1 \
+  --count=2 --seed=7 --format=html --task-size=1 \
   --confirm-test-inbox=SEND_SYNTHETIC_TEST
 ```
 
 Asynq task execution is at least once. Redis owns an atomic, non-reclaimable SMTP reservation, so redelivery cannot submit the same intended synthetic message twice. A reservation whose final SMTP state cannot be proven is reported as `delivery_indeterminate`; the tool does not claim exactly-once delivery. Redis ambiguity produces `accounting_scope:"unknown"` and never falls back to local execution.
+
+Distributed format compatibility is additive. Existing task payloads with no format field mean text, and text producers omit that field. HTML producers send `"format":"html"` explicitly. Deploy HTML-aware workers before any producer emits HTML, because older strict workers reject the new field. To roll back, return producers to text while keeping HTML-aware workers running until every HTML task is terminal. Task types, queues, deterministic task IDs, campaign identities, Redis keys, ledger snapshots, and reconciliation identities do not change.
 
 ## Test strategy and evidence
 
@@ -300,8 +338,8 @@ The final feature-branch verification on 2026-07-28 produced:
 
 | Check | Result |
 |---|---|
-| Standard suite | 130 tests passed across 6 packages |
-| Race-enabled shuffled suite | 130 tests passed across 6 packages |
+| Standard suite | 205 tests passed across 6 packages |
+| Race-enabled shuffled suite | 205 tests passed across 6 packages |
 | Static analysis | `go vet ./...` passed |
 | Formatting and patch checks | `gofmt -l .` and `git diff --check` produced no findings |
 | Default-path smoke | Deterministic generate-then-run completed with balanced counts |
@@ -311,13 +349,14 @@ The final feature-branch verification on 2026-07-28 produced:
 The automated suite covers more than happy-path throughput:
 
 - deterministic fixture bytes and generated-source parity;
-- named and fallback personalization;
+- named and fallback personalization, text-byte compatibility, and HTML semantic parity and safety;
 - malformed rows, conservative email validation, exact deduplication, and fatal input boundaries;
 - reconciliation identities, partial success, sink failure, cancellation, and report validation;
 - privacy canaries in stdout, stderr, optional configuration failures, Redis state, and task payloads;
-- SMTP acceptance, rejection, TLS/configuration failure, and indeterminate post-submission transport state;
-- Redis atomic state transitions, duplicate attempts, retries, exhaustion, campaign closure, and unknown-state reporting;
-- real Asynq integration against standalone Redis.
+- SMTP acceptance, rejection, TLS/configuration failure, indeterminate post-submission transport state, and per-message MIME;
+- Redis atomic state transitions, duplicate attempts, retries, exhaustion, campaign closure, unknown-state reporting, and old/default-text versus explicit-HTML payload compatibility;
+- real Asynq integration against standalone Redis;
+- evaluator full-page and HTMX lifecycle states: preview, validation, busy admission, owned cancellation, conflict, completion, interruption, and explicit text-response metadata.
 
 CI keeps the default job service-free, proves poisoned optional endpoints do not affect local execution, and runs a 10,000-record end-to-end smoke test. A separate Redis job exercises the ledger and Asynq integration tests. SMTP protocol tests use an in-process TLS wire server and require no external credentials. `Dockerfile.bench` is an optional pinned Linux environment; Docker is not needed for normal use.
 
