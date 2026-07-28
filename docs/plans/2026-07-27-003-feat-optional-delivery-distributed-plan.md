@@ -1,7 +1,7 @@
 ---
 title: "feat: Add guarded delivery and distributed dry runs"
 type: feat
-status: active
+status: completed
 date: 2026-07-27
 origin: docs/brainstorms/2026-07-26-personalized-email-campaign-requirements.md
 ---
@@ -10,14 +10,14 @@ origin: docs/brainstorms/2026-07-26-personalized-email-campaign-requirements.md
 
 ## Summary
 
-Extend the existing CLI with two deliberately narrow optional demonstrations while preserving the proven local dry run unchanged: a local SMTP test-inbox run over at most ten generated recipients, and an Asynq/Redis dry run over a generated fixture with separately started workers. Shared contracts remain small; network and Redis initialization occurs only after mode-specific preflight succeeds.
+Extend the existing CLI with independently selectable guarded delivery and distributed execution while preserving the proven local dry run unchanged. Test-inbox runs use at most ten generated recipients; Asynq/Redis runs use separately started workers and durable application-owned state. Shared contracts remain small; network and Redis initialization occurs only after mode-specific preflight succeeds.
 
 | Backend | Sink | Input | Result |
 |---|---|---|---|
 | `local` | `dry-run` | Supplied CSV | Existing authoritative path, unchanged defaults and report semantics |
 | `local` | `test-inbox` | Generated fixture, 1-10 records | Guarded SMTP delivery with confirmed/rejected/indeterminate outcomes |
 | `asynq` | `dry-run` | Generated fixture | Submit-and-wait distributed rendering with durable Redis accounting |
-| `asynq` | `test-inbox` | Any | Refused before campaign work, Redis access, or network delivery |
+| `asynq` | `test-inbox` | Generated fixture, 1-10 records | At-least-once task execution with durable at-most-once SMTP reservation and terminal delivery evidence |
 
 ---
 
@@ -31,9 +31,9 @@ The local pipeline already proves one million complete render-and-sink operation
 
 The origin remains authoritative. This plan implements its optional extension while preserving R1-R15.
 
-- R16: allow only preflight-guarded local test-inbox runs over deterministic generated fixtures of at most ten records; count completion only after confirmed SMTP acceptance and never retry an indeterminate delivery.
-- R17: allow only generated-fixture Asynq dry runs with separate worker processes, at-least-once task execution, application-owned idempotency, durable closure, bounded waiting, and honest Redis-loss semantics.
-- R18: support exactly the three combinations in the matrix above, retain dependency-free runtime behavior for the default path, disclose distributed evidence separately, and select operational values from measurements rather than assumptions.
+- R16: allow only preflight-guarded test-inbox runs over deterministic generated fixtures of at most ten records; count completion only after confirmed SMTP acceptance and never retry an indeterminate delivery.
+- R17: allow generated-fixture Asynq execution with either sink, separate worker processes, at-least-once task execution, application-owned idempotency, durable closure, bounded waiting, and honest Redis-loss semantics.
+- R18: support all four independent backend/sink combinations, retain dependency-free runtime behavior for the default path, and use an atomic non-reclaimable delivery reservation to keep distributed SMTP submission at most once per intended synthetic message.
 
 **Origin actors:** A1 Evaluator, A2 Operator, A3 Test delivery environment.
 
@@ -46,7 +46,7 @@ The origin remains authoritative. This plan implements its optional extension wh
 ## Scope boundaries
 
 - No delivery to supplied recipients, arbitrary destinations, or more than ten test-inbox messages.
-- No `asynq + test-inbox` composition, exactly-once claim, detached submission, status API, dashboard, scheduler, or production campaign platform.
+- No exactly-once task or delivery claim, detached submission, status API, dashboard, scheduler, or production campaign platform.
 - No Redis Cluster support in this demonstration; Asynq v0.26.0 documents Lua-script limitations on Redis Cluster. Use standalone Redis.
 - No persistence of supplied-recipient PII in Redis. Distributed tasks contain generated synthetic values, campaign identifiers, ordinals, and bounded metadata only.
 - No hidden local fallback after optional-mode failure.
@@ -55,7 +55,7 @@ The origin remains authoritative. This plan implements its optional extension wh
 
 ### Deferred to follow-up work
 
-- External delivery under Asynq: requires a provider-level idempotency and reconciliation contract.
+- Provider-confirmed recovery of an SMTP acceptance lost to worker crash: unresolved reservations remain indeterminate unless a future provider-level reconciliation contract is added.
 - Multiple weighted queues: add only after distinct measured workload classes establish a latency or fairness objective.
 - Redis Cluster or another durable store: evaluate only if this demonstration becomes a deployed service.
 
@@ -92,14 +92,14 @@ The origin remains authoritative. This plan implements its optional extension wh
 | Test-inbox transport | Use SMTP through go-mail with mandatory TLS and bounded context. Destination, sender, server, and credentials come from environment variables. The independently configured allowlist must contain the normalized destination. |
 | Delivery classification | Successful completion of the SMTP transaction is confirmed acceptance. Typed SMTP envelope/DATA rejection is definitive rejection. Connection or context loss after message submission begins is indeterminate. All other pre-submission failures are definitive transport failures. Neither rejection nor indeterminate delivery is retried automatically. |
 | Local integration | Test-inbox supplies a sink function to the existing `campaign.Run`; no alternate local lifecycle engine is introduced. Generated records feed `campaign.SliceSource`-equivalent iteration directly. |
-| Distributed source of truth | Asynq transports work; Redis campaign metadata and status sets are authoritative. Atomic Lua scripts implement open/closed checks, attempt registration, terminal transition, duplicate-attempt counting, and closure. |
+| Distributed source of truth | Asynq transports work; Redis campaign metadata and status sets are authoritative. Atomic Lua scripts implement open/closed checks, attempt registration, delivery reservation, terminal transition, duplicate-attempt counting, and closure. |
 | Distributed work unit | A task carries a bounded ordinal range plus generation parameters and campaign ID, not recipient files or bodies. The worker deterministically regenerates each synthetic recipient in the range, checks durable campaign state before each render, computes the digest effect, and atomically commits each ordinal once. |
-| Idempotency | Deterministic task IDs reduce enqueue ambiguity. A terminal recipient transition is compare-and-set; repeated execution may recompute a digest but cannot repeat the committed effect or lifecycle count. Asynq uniqueness is optional throttling only. |
+| Idempotency | Deterministic task IDs reduce enqueue ambiguity. Dry-run terminal transitions are compare-and-set. Test-inbox work atomically reserves each ordinal before SMTP and never reclaims the reservation for retry; duplicate handlers are inert, and unresolved reservations settle as indeterminate. Asynq uniqueness is optional throttling only. |
 | Campaign ledger | Use one Redis hash tag per campaign so metadata and status keys share a slot. Maintain disjoint sets for acknowledged, started, completed, failed, and unprocessed ordinals plus counters for attempts, retries, duplicates, and timing aggregates. Store no recipient PII or rendered body. |
 | Cancellation and closure | Producer cancellation atomically closes the campaign before reporting. Pending acknowledged ordinals become unprocessed; started ordinals may settle until the campaign deadline, then become failed due to interruption. Every later worker attempt reads closed state before rendering and exits inert. |
 | Unknown state | Any loss of reliable enqueue acknowledgement or ledger visibility yields `failure` and `accounting_scope=unknown`. Preserve last-trustworthy counts; report known-enqueued, known-terminal, and unknown totals outside normal lifecycle buckets, with no reconciliation claim over unknown work. |
 | Worker shutdown | `worker` handles SIGINT/SIGTERM by stopping fetch and invoking Asynq graceful shutdown with an explicit settlement timeout. Unfinished tasks return to Redis and remain safe to execute elsewhere. |
-| Queue topology | One fixed queue (`email:dry-run`) for the smallest demonstration. Do not expose queue weights or strict priority until workload classes exist. |
+| Queue topology | One sink-specific queue per invocation (`email:dry-run` or `email:test-inbox`) prevents a worker without SMTP configuration from fetching delivery work. Do not expose queue weights or strict priority until workload classes exist. |
 | Tuning | Implement candidate flags and benchmark harness first. Measure a small matrix, then set and document demonstration defaults in the same implementation cycle. Values remain environment-specific, not production recommendations. |
 | Reporting | Extend the existing JSON document additively with selected mode, test-delivery evidence, and distributed evidence. Local default output remains semantically compatible; unknown distributed reports use a dedicated validation branch rather than weakening `Counts.Validate`. |
 | Dependency isolation | The module gains optional libraries, but no service is contacted and no optional environment variable is read on the default path. Replace the obsolete import-graph ban with subprocess tests against unreachable endpoints and credential canaries. |
@@ -278,8 +278,8 @@ flowchart TB
 
 **Approach:**
 - Create campaign metadata with generated fixture parameters, total eligible count, open state, deadlines, and version. Use a random non-sensitive campaign ID and Redis hash-tagged keys.
-- Track acknowledged, started, completed, failed, and unprocessed ordinals in disjoint sets, plus bounded counters/timing aggregates in metadata. No email, name, body, credential, or raw external error enters Redis.
-- Implement atomic scripts for acknowledge range, begin attempt, commit completion/failure, close campaign, settle expired started work, and read a consistent snapshot.
+- Track acknowledged, started, delivery-reserved, completed, failed, and unprocessed ordinals in disjoint lifecycle state, plus bounded counters/timing aggregates in metadata. No email, name, body, credential, or raw external error enters Redis.
+- Implement atomic scripts for acknowledge range, begin attempt, reserve delivery, commit completion/failure, close campaign, settle expired started or reserved work, and read a consistent snapshot.
 - `begin attempt` checks open state and terminal sets before returning permission to render; retries/duplicates increment observability counters but cannot create another terminal transition.
 - Closure atomically changes state before pending work is classified. Snapshot validation proves set disjointness and count equations when state is trustworthy.
 - Redis errors retain the caller's last confirmed snapshot and become unknown state; no read failure is interpreted as an empty set or missing campaign.
@@ -295,6 +295,7 @@ flowchart TB
 - Covers AE18. A retry after a started attempt can complete once; retry exhaustion commits one failed terminal state.
 - Covers AE20. Closure before start moves acknowledged work to unprocessed and every later begin attempt is inert before rendering.
 - Covers AE20. Closure with started work permits settlement until deadline, then commits remaining started ordinals as interrupted failures once.
+- Covers AE18. A delivery reservation is granted once across concurrent attempts, is never reclaimed, and an unresolved reservation settles as indeterminate without another SMTP attempt.
 - Covers AE19. Redis loss preserves the last trustworthy snapshot and returns unknown; it never fabricates zero work or terminal buckets.
 - Privacy: Redis key/value scan contains no generated email/name/body or credential canaries, only campaign IDs, fixture parameters, ordinals, states, and metrics.
 - Concurrency: many goroutines race duplicate transitions under `-race`; Redis sets remain disjoint and counts stable.
@@ -318,10 +319,10 @@ flowchart TB
 - Test: `internal/distributed/asynq_integration_test.go`
 
 **Approach:**
-- Pin Asynq v0.26.0 and use one `email:dry-run` queue. Task payload contains campaign ID, fixture algorithm/seed/count, and bounded ordinal range only.
+- Pin Asynq v0.26.0 and use sink-specific `email:dry-run` and `email:test-inbox` queues. Task payload contains campaign ID, selected sink, fixture algorithm/seed/count, and bounded ordinal range only.
 - Producer creates the ledger, enqueues ranges sequentially with deterministic task IDs, explicit retry/retention settings, and bounded enqueue contexts, recording acknowledged ranges only after confirmed enqueue.
 - On enqueue error, inspect deterministic ID when possible. If commitment cannot be proven, close as unknown and stop enqueueing; never resubmit blindly or fall back locally.
-- Worker decodes/validates payload, begins each ordinal through the ledger, regenerates the synthetic recipient, runs the existing campaign renderer through a fresh digest sink, and atomically commits digest metadata and timing without storing the body.
+- Worker decodes/validates payload, begins each ordinal through the ledger, regenerates the synthetic recipient, and renders through the selected sink. Dry-run work commits digest metadata; test-inbox work obtains one durable delivery reservation before SMTP and commits only the closed confirmed/rejected/indeterminate result without storing body or destination.
 - Permanent payload/configuration errors wrap `asynq.SkipRetry`; transient Redis/worker errors retry through explicit policy. ErrorHandler records exhaustion through the ledger without raw error strings.
 - Producer polls compact ledger snapshots until terminal, cancellation, unknown state, or completion deadline. Cancellation closes durably before settlement and reporting.
 - Worker command uses `Server.Stop` and `Server.Shutdown`; explicit shutdown timeout returns unfinished tasks for another worker.
@@ -335,7 +336,8 @@ flowchart TB
 **Test scenarios:**
 - Covers AE18. Duplicate deterministic task enqueue and repeated execution yield one terminal effect/count and observable duplicate attempts.
 - Covers AE18. Handler commits effect then returns a transient failure; redelivery remains idempotent.
-- Covers AE18. Retry exhaustion archives the task and commits one failed ordinal without double counting.
+- Covers AE18. Retry exhaustion archives a dry-run task and commits one failed ordinal without double counting.
+- Covers AE18. Test-inbox duplicate execution, redelivery, uniqueness expiry, and a crash after reservation never produce a second SMTP attempt; unresolved reservations settle as indeterminate.
 - Covers AE19. Redis unavailable before acknowledged enqueue reports zero distributed campaign work; failure after an acknowledged prefix preserves prefix evidence.
 - Covers AE19. Connection loss around enqueue or ledger polling yields unknown state, not proven failure/completion or local fallback.
 - Covers AE20. No worker progress reaches the completion deadline and reports failure; operator cancellation reports interrupted only after durable closure and trustworthy classification.
@@ -347,7 +349,7 @@ flowchart TB
 
 ### U5. Integrate selectors, commands, reports, and privacy boundaries
 
-**Goal:** Expose the three supported combinations through a discoverable CLI while preserving the exact default local behavior and refusal-first safety.
+**Goal:** Expose all four backend/sink combinations through a discoverable CLI while preserving the exact default local behavior and refusal-first safety.
 
 **Requirements:** R1-R18; F1-F5; AE1-AE20.
 
@@ -370,7 +372,7 @@ flowchart TB
 - Parse all run flags into a typed mode configuration and validate the full combination before opening input or constructing optional clients.
 - Route default `local + dry-run + --input` through the existing reader and `campaign.Run` without optional environment access.
 - Route `local + test-inbox` through generated iteration and the SMTP sink after confirmation, count, allowlist, and configuration preflight.
-- Route `asynq + dry-run` through generated parameters and the producer; reject `--input`. Route `worker` to the separate Asynq server lifecycle.
+- Route both Asynq sinks through generated parameters and the producer; reject `--input`. Test-inbox preflight completes before Redis construction or enqueue. Route `worker` to the sink-specific separate Asynq server lifecycle.
 - Extend output with mode-specific evidence while preserving existing outcomes and exit codes. Guard refusal emits failure, zero work, and a static reason.
 - Replace dependency-graph network prohibition with subprocess tests that set unreachable optional endpoints and credential canaries, then prove default generate/run complete unchanged without attempting network or revealing optional environment values.
 
@@ -381,7 +383,7 @@ flowchart TB
 
 **Test scenarios:**
 - Covers AE1-AE16. Existing generate, local run, cancellation, privacy, and million-record smoke behavior remains unchanged with selectors omitted.
-- Covers AE17. Valid test-inbox config sends generated records only; counts 0 or above 10, supplied `--input`, missing confirmation, missing allowlist, and unsupported composition fail before adapter construction with zero attempts.
+- Covers AE17. Valid test-inbox config sends generated records only with either backend; counts 0 or above 10, supplied `--input`, missing confirmation, and missing allowlist fail before adapter or Redis construction with zero attempts.
 - Covers AE12/AE19. Asynq selection with unreachable Redis fails visibly and never invokes local processing; default local run succeeds under the same environment.
 - Covers AE18. Asynq producer requires generated parameters and does not start a worker in process.
 - Covers AE20. Worker command exits through graceful shutdown and emits no credential-bearing errors.
@@ -389,7 +391,7 @@ flowchart TB
 - CLI matrix: all four backend/sink combinations, mutually exclusive input forms, invalid enum values, and optional flags in the wrong mode have deterministic outcomes.
 
 **Verification:**
-- The binary exposes the documented commands and exactly three supported combinations; omitted selectors remain the existing offline path byte-for-byte at the behavioral contract level.
+- The binary exposes the documented commands and all four supported combinations; omitted selectors remain the existing offline path byte-for-byte at the behavioral contract level.
 
 ### U6. Select measured defaults and document repeatable operation
 
@@ -410,7 +412,7 @@ flowchart TB
 - Benchmark a bounded matrix of task sizes, worker concurrency, retry limits, completion deadlines, and shutdown timeouts against standalone Redis after correctness/race/privacy gates pass. Record every candidate and choose useful-work throughput only among candidates with exact accounting, bounded memory/queue growth, duplicate/retry recovery, and no observed starvation.
 - Set selected values as demonstration defaults in CLI configuration and state environment/hardware; do not call them production optimal.
 - Preserve the existing million-record local benchmark and reference evidence as authoritative.
-- Document supported/refused combinations, synthetic-only guards, environment variables by purpose, least privilege, worker startup, Redis failure semantics, no exactly-once claims, and opt-in sandbox SMTP verification.
+- Document all four combinations, synthetic-only guards, environment variables by purpose, least privilege, sink-specific worker startup, Redis failure semantics, at-most-once SMTP reservation without exactly-once claims, and opt-in sandbox SMTP verification.
 - Keep the existing no-service CI job. Add a separate Redis service job for distributed integration tests; SMTP tests remain local wire tests and require no credentials.
 - Ignore optional benchmark output and local service captures; never commit credentials or delivery artifacts.
 
