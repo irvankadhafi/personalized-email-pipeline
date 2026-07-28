@@ -30,6 +30,104 @@ func TestRenderNamedAndFallback(t *testing.T) {
 	}
 }
 
+func TestRenderMessage_preserves_exact_text_bytes_for_named_recipient(t *testing.T) {
+	// Given
+	recipient := Recipient{Name: "Ada", Email: "ada@example.com"}
+	want := []byte("Subject: Your exclusive offer\n\nHello Ada,\n\nExclusive offer: save 20% on your next purchase.\n")
+
+	// When
+	message, category := RenderMessage(recipient, TextFormat)
+
+	// Then
+	if category != CategoryNamed || message.Format() != TextFormat || string(message.Bytes()) != string(want) {
+		t.Fatalf("category=%q format=%q bytes=%q", category, message.Format(), message.Bytes())
+	}
+}
+
+func TestRenderMessage_preserves_exact_text_bytes_for_fallback_recipient(t *testing.T) {
+	// Given
+	recipient := Recipient{Email: "guest@example.com"}
+	want := []byte("Subject: Your exclusive offer\n\nHello there,\n\nExclusive offer: save 20% on your next purchase.\n")
+
+	// When
+	message, category := RenderMessage(recipient, Format{})
+
+	// Then
+	if category != CategoryFallback || message.Format() != TextFormat || string(message.Bytes()) != string(want) {
+		t.Fatalf("category=%q format=%q bytes=%q", category, message.Format(), message.Bytes())
+	}
+}
+
+func TestParseFormat_accepts_closed_values_and_rejects_unsupported_input(t *testing.T) {
+	// Given
+	tests := []struct {
+		raw  string
+		want Format
+	}{
+		{raw: "", want: TextFormat},
+		{raw: "text", want: TextFormat},
+		{raw: "html", want: HTMLFormat},
+	}
+
+	for _, test := range tests {
+		t.Run(test.raw, func(t *testing.T) {
+			// When
+			got, err := ParseFormat(test.raw)
+
+			// Then
+			if err != nil || got != test.want {
+				t.Fatalf("ParseFormat(%q)=(%q, %v) want %q", test.raw, got, err, test.want)
+			}
+		})
+	}
+
+	// When
+	_, err := ParseFormat("markdown")
+
+	// Then
+	if !errors.Is(err, ErrInvalidFormat) {
+		t.Fatalf("error=%v want %v", err, ErrInvalidFormat)
+	}
+}
+
+func TestRenderMessage_html_has_text_semantics_and_escapes_personalization(t *testing.T) {
+	// Given
+	recipient := Recipient{Name: `<Ada onmouseover="alert(1)">& Co`, Email: "ada@example.com"}
+
+	// When
+	message, category := RenderMessage(recipient, HTMLFormat)
+	body := string(message.Bytes())
+
+	// Then
+	if category != CategoryNamed || message.Format() != HTMLFormat {
+		t.Fatalf("category=%q format=%q", category, message.Format())
+	}
+	for _, semantic := range []string{"Your exclusive offer", "Hello &lt;Ada onmouseover=&#34;alert(1)&#34;&gt;&amp; Co,", promotion} {
+		if !strings.Contains(body, semantic) {
+			t.Fatalf("HTML missing %q: %q", semantic, body)
+		}
+	}
+	for _, unsafe := range []string{"<script", "<form", "onmouseover=\"", "onerror=", "javascript:", "http://", "https://", "<a ", "<img", "<link", "<iframe"} {
+		if strings.Contains(strings.ToLower(body), unsafe) {
+			t.Fatalf("HTML contains active content %q: %q", unsafe, body)
+		}
+	}
+}
+
+func TestRenderMessage_html_preserves_fallback_semantics(t *testing.T) {
+	// Given
+	recipient := Recipient{Email: "guest@example.com"}
+
+	// When
+	message, category := RenderMessage(recipient, HTMLFormat)
+	body := string(message.Bytes())
+
+	// Then
+	if category != CategoryFallback || !strings.Contains(body, "Hello there,") || !strings.Contains(body, promotion) {
+		t.Fatalf("category=%q body=%q", category, body)
+	}
+}
+
 func TestRenderRequiresSinkAcceptance(t *testing.T) {
 	result := Render(context.Background(), Recipient{Name: "Ada"}, func(context.Context, []byte) error {
 		return errors.New("SECRET sink detail")
