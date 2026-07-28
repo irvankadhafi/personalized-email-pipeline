@@ -33,7 +33,9 @@ type RunConfig struct {
 	Workers       int
 	Settlement    time.Duration
 	ResponseBound time.Duration
+	Format        Format
 	Sink          SinkFunc
+	MessageSink   MessageSinkFunc
 }
 
 type ReasonSummary struct {

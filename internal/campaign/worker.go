@@ -6,24 +6,35 @@ import (
 	"time"
 )
 
-func runWorker(ctx context.Context, wg *sync.WaitGroup, ready chan<- workerReady, results chan<- workerResult, sink SinkFunc) {
-	defer wg.Done()
+type workerConfig struct {
+	ready   chan<- workerReady
+	results chan<- workerResult
+	format  Format
+	sink    MessageSinkFunc
+}
+
+func runWorker(ctx context.Context, workers *sync.WaitGroup, config workerConfig) {
+	defer workers.Done()
 	grant := make(chan job)
 	for {
 		select {
-		case ready <- workerReady{grant: grant}:
+		case config.ready <- workerReady{grant: grant}:
 		case <-ctx.Done():
 			return
 		}
 		select {
 		case work := <-grant:
-			result := Render(ctx, work.recipient, sink)
-			event := workerResult{ordinal: work.recipient.Ordinal, category: result.Category, reason: result.Reason, accepted: time.Now()}
+			message, category := RenderMessage(work.recipient, config.format)
+			reason := Reason("")
+			if err := config.sink(ctx, message); err != nil {
+				reason = ReasonSink
+			}
+			event := workerResult{ordinal: work.recipient.Ordinal, category: category, reason: reason, accepted: time.Now()}
 			select {
-			case results <- event:
+			case config.results <- event:
 			case <-ctx.Done():
 				select {
-				case results <- event:
+				case config.results <- event:
 				default:
 				}
 			}

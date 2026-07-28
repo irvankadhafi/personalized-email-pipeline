@@ -17,9 +17,14 @@ func Run(ctx context.Context, next NextFunc, cfg RunConfig) RunReport {
 	if cfg.ResponseBound <= 0 {
 		cfg.ResponseBound = DefaultResponseBound
 	}
-	if cfg.Sink == nil {
+	if cfg.MessageSink == nil && cfg.Sink == nil {
 		digest := NewDigestSink()
-		cfg.Sink = digest.Accept
+		cfg.MessageSink = digest.AcceptMessage
+	}
+	if cfg.MessageSink == nil {
+		cfg.MessageSink = func(ctx context.Context, message RenderedMessage) error {
+			return cfg.Sink(ctx, message.Bytes())
+		}
 	}
 	start := time.Now()
 	workerCtx, stopWorkers := context.WithCancel(context.Background())
@@ -29,7 +34,7 @@ func Run(ctx context.Context, next NextFunc, cfg RunConfig) RunReport {
 	var workers sync.WaitGroup
 	for range cfg.Workers {
 		workers.Add(1)
-		go runWorker(workerCtx, &workers, ready, results, cfg.Sink)
+		go runWorker(workerCtx, &workers, workerConfig{ready: ready, results: results, format: cfg.Format, sink: cfg.MessageSink})
 	}
 	peak := startHeapSampler(workerCtx)
 
