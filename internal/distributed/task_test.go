@@ -7,7 +7,76 @@ import (
 	"testing"
 
 	"github.com/hibiken/asynq"
+	"github.com/irvankadhafi/personalized-email-pipeline/internal/campaign"
 )
+
+const oldVersionOnePayload = `{"version":1,"campaign_id":"campaign-1","sink":"dry-run","algorithm":"v1","seed":7,"count":10,"first":1,"last":10}`
+
+func TestDecodeTaskTreatsOldVersionOnePayloadAsText(t *testing.T) {
+	// Given
+	task := asynq.NewTask(TaskTypeDryRun, []byte(oldVersionOnePayload))
+
+	// When
+	payload, err := DecodeTask(task)
+
+	// Then
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if payload.Format != campaign.TextFormat {
+		t.Fatalf("format=%q want text", payload.Format.String())
+	}
+}
+
+func TestNewTaskOmitsDefaultTextFormat(t *testing.T) {
+	// Given
+	payload := validTaskPayload()
+
+	// When
+	task, err := NewTask(payload)
+
+	// Then
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !bytes.Equal(task.Payload(), []byte(oldVersionOnePayload)) {
+		t.Fatalf("payload=%s", task.Payload())
+	}
+}
+
+func TestTaskPayloadRoundTripsExplicitHTML(t *testing.T) {
+	// Given
+	payload := validTaskPayload()
+	payload.Format = campaign.HTMLFormat
+
+	// When
+	task, err := NewTask(payload)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	decoded, err := DecodeTask(task)
+
+	// Then
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if decoded.Format != campaign.HTMLFormat || !bytes.Contains(task.Payload(), []byte(`"format":"html"`)) {
+		t.Fatalf("decoded=%+v payload=%s", decoded, task.Payload())
+	}
+}
+
+func TestDecodeTaskRejectsUnsupportedFormat(t *testing.T) {
+	// Given
+	task := asynq.NewTask(TaskTypeDryRun, []byte(`{"version":1,"campaign_id":"campaign-1","sink":"dry-run","algorithm":"v1","seed":7,"count":1,"first":1,"last":1,"format":"markdown"}`))
+
+	// When
+	_, err := DecodeTask(task)
+
+	// Then
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("expected invalid request, got %v", err)
+	}
+}
 
 func TestTaskPayloadRoundTripsGeneratedRange(t *testing.T) {
 	payload := validTaskPayload()
