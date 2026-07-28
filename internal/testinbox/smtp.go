@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 
+	"github.com/irvankadhafi/personalized-email-pipeline/internal/campaign"
 	mail "github.com/wneessen/go-mail"
 )
 
@@ -57,6 +58,18 @@ func (s *Sink) Accept(ctx context.Context, body []byte) error {
 }
 
 func (s *Sink) Deliver(ctx context.Context, body []byte) DeliveryResult {
+	return s.deliver(ctx, body, mail.TypeTextPlain)
+}
+
+func (s *Sink) DeliverMessage(ctx context.Context, message campaign.RenderedMessage) DeliveryResult {
+	contentType := mail.TypeTextPlain
+	if message.Format() == campaign.HTMLFormat {
+		contentType = mail.TypeTextHTML
+	}
+	return s.deliver(ctx, message.Bytes(), contentType)
+}
+
+func (s *Sink) deliver(ctx context.Context, body []byte, contentType mail.ContentType) DeliveryResult {
 	if err := ctx.Err(); err != nil {
 		return DeliveryResult{Status: DeliveryTransport, Err: ErrTransport}
 	}
@@ -79,7 +92,7 @@ func (s *Sink) Deliver(ctx context.Context, body []byte) DeliveryResult {
 		return DeliveryResult{Status: DeliveryRejected, Err: ErrConfiguration}
 	}
 	msg.Subject("Test inbox delivery")
-	msg.SetBodyString(mail.TypeTextPlain, string(body))
+	msg.SetBodyString(contentType, string(body))
 	smtpClient, err := client.DialToSMTPClientWithContext(ctx)
 	if err != nil {
 		return DeliveryResult{Status: DeliveryTransport, Err: ErrTransport}
