@@ -1,0 +1,25 @@
+{{define "result"}}
+<section class="region result result-swap" id="result" aria-label="Evaluation result" aria-live="polite">
+  <input id="evaluator-run-id" type="hidden" value="{{.RunID}}">
+  <div class="result-content">
+  {{if .Error}}
+    {{if eq .Error "invalid_request"}}<div class="status status-danger"><h2 id="result-heading">Invalid benchmark controls</h2><p>Correct the named fields. No campaign work ran.</p></div>
+    {{else if eq .Error "evaluation_busy"}}<div class="status status-danger"><h2 id="result-heading">Demonstration already active</h2><p>This request did not enter a queue and did not change the active run.</p></div>
+    {{else if eq .Error "cancellation_conflict"}}<div class="status status-danger"><h2 id="result-heading">No applicable active run to cancel</h2><p>No other run changed.</p></div>
+    {{else if eq .Error "cancellation_requested"}}<div class="status"><h2 id="result-heading">Cancellation requested</h2><p>The owned local run is settling under the existing cancellation contract.</p></div>
+    {{else}}<div class="status status-danger"><h2 id="result-heading">Evaluation unavailable</h2><p>The evaluator could not prepare a safe result. No internal details are shown.</p></div>{{end}}
+  {{else if .Result}}
+    {{if eq .Outcome "success"}}<div class="status status-success"><h2 id="result-heading">Completed</h2><p>The local campaign completed with the existing accounting report.</p></div>
+    {{else if eq .Outcome "partial_success"}}<div class="status status-warning"><h2 id="result-heading">Partial success</h2><p>The existing report contains reconciled partial-success evidence.</p></div>
+    {{else if eq .Outcome "interrupted"}}<div class="status status-warning"><h2 id="result-heading">Interrupted</h2><p>The owned run was interrupted and reconciled under the existing cancellation contract.</p></div>
+    {{else}}<div class="status status-danger"><h2 id="result-heading">Failure</h2><p>The existing report contains the evaluator-safe failure evidence.</p></div>{{end}}
+    <dl><div><dt>Effective count</dt><dd>{{.Count}}</dd></div><div><dt>Effective seed</dt><dd>{{.Seed}}</dd></div><div><dt>Effective worker count</dt><dd>{{.Workers}}</dd></div><div><dt>Selected format</dt><dd>{{.Format}}</dd></div><div><dt>Campaign-processing elapsed</dt><dd>{{.ProcessingElapsed}}</dd></div><div><dt>Total server-request duration</dt><dd>{{.RequestDuration}}</dd></div></dl>
+    <p class="help">Request duration begins after successful validation and ends when response data is ready. It excludes browser rendering and network transfer.</p><p class="help">This is machine-specific interactive evidence. Use the CLI benchmark procedure for authoritative one-million-record evidence.</p>
+    <h3>Campaign report</h3><pre>{{.Result}}</pre>
+  {{else}}
+    <h2 id="result-heading">Ready to evaluate</h2><p>Choose a bounded fixture count and seed to inspect privacy-safe accounting evidence.</p>
+  {{end}}
+  </div>
+  <div class="running-content"><h2>Local campaign running</h2><p>Local campaign running with the submitted configuration. Cancellation is available for this owned run.</p><button class="secondary" type="button" hx-post="/cancel" hx-target="#result" hx-swap="none" hx-vals='js:{"run_id":document.getElementById("evaluator-run-id").value}'>Cancel run</button></div>
+</section>
+{{end}}
