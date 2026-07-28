@@ -1,0 +1,112 @@
+package distributed
+
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/irvankadhafi/personalized-email-pipeline/internal/testinbox"
+)
+
+func TestWorkerCompletesDryRunRange(t *testing.T) {
+	ledger, _, campaign, now := newTestLedger(t, 2)
+	requireNoError(t, ledger.Acknowledge(context.Background(), campaign.ID, AcknowledgeRequest{Start: 1, End: 2, Now: now}))
+	worker, err := NewWorker(WorkerConfig{Ledger: ledger})
+	requireNoError(t, err)
+	task, err := NewTask(TaskPayload{
+		Version: PayloadVersion, CampaignID: campaign.ID, Sink: TaskSinkDryRun,
+		Algorithm: campaign.Algorithm, Seed: campaign.Seed, Count: campaign.Total, First: 1, Last: 2,
+	})
+	requireNoError(t, err)
+
+	requireNoError(t, worker.ProcessTask(context.Background(), task))
+
+	snapshot, err := ledger.Snapshot(context.Background(), campaign.ID)
+	requireNoError(t, err)
+	if snapshot.Completed != 2 || snapshot.Started != 0 || snapshot.Attempts != 2 {
+		t.Fatalf("unexpected dry-run snapshot: %+v", snapshot)
+	}
+}
+
+func TestWorkerOneShotRedeliveryDoesNotDeliverAgain(t *testing.T) {
+	ledger, _, campaign, now := newDeliveryTestLedger(t, 1)
+	requireNoError(t, ledger.Acknowledge(context.Background(), campaign.ID, AcknowledgeRequest{Start: 1, End: 1, Now: now}))
+	_, err := ledger.Begin(context.Background(), campaign.ID, BeginRequest{Ordinal: 1, Kind: AttemptInitial, Now: now})
+	requireNoError(t, err)
+	var deliveries atomic.Int64
+	worker, err := NewWorker(WorkerConfig{
+		Ledger: ledger,
+		Deliver: func(context.Context, []byte) testinbox.DeliveryResult {
+			deliveries.Add(1)
+			return testinbox.DeliveryResult{Status: testinbox.DeliveryConfirmed}
+		},
+	})
+	requireNoError(t, err)
+	task, err := NewTask(TaskPayload{
+		Version: PayloadVersion, CampaignID: campaign.ID, Sink: TaskSinkTestInbox,
+		Algorithm: campaign.Algorithm, Seed: campaign.Seed, Count: campaign.Total, First: 1, Last: 1,
+	})
+	requireNoError(t, err)
+
+	requireNoError(t, worker.ProcessTask(context.Background(), task))
+
+	if deliveries.Load() != 0 {
+		t.Fatalf("redelivery attempted SMTP %d times", deliveries.Load())
+	}
+}
+
+func TestWorkerCommitsIndeterminateDeliveryWithoutRetry(t *testing.T) {
+	ledger, client, campaign, now := newDeliveryTestLedger(t, 1)
+	requireNoError(t, ledger.Acknowledge(context.Background(), campaign.ID, AcknowledgeRequest{Start: 1, End: 1, Now: now}))
+	var deliveries atomic.Int64
+	worker, err := NewWorker(WorkerConfig{
+		Ledger: ledger,
+		Deliver: func(context.Context, []byte) testinbox.DeliveryResult {
+			deliveries.Add(1)
+			return testinbox.DeliveryResult{Status: testinbox.DeliveryIndeterminate, Err: testinbox.ErrIndeterminate}
+		},
+	})
+	requireNoError(t, err)
+	task, err := NewTask(TaskPayload{
+		Version: PayloadVersion, CampaignID: campaign.ID, Sink: TaskSinkTestInbox,
+		Algorithm: campaign.Algorithm, Seed: campaign.Seed, Count: campaign.Total, First: 1, Last: 1,
+	})
+	requireNoError(t, err)
+
+	requireNoError(t, worker.ProcessTask(context.Background(), task))
+	requireNoError(t, worker.ProcessTask(context.Background(), task))
+
+	if deliveries.Load() != 1 {
+		t.Fatalf("expected one delivery attempt, got %d", deliveries.Load())
+	}
+	reason, err := client.HGet(context.Background(), campaignKeys(campaign.ID)[7], "1").Result()
+	requireNoError(t, err)
+	if reason != string(FailureDeliveryIndeterminate) {
+		t.Fatalf("unexpected failure reason %q", reason)
+	}
+}
+
+func TestWorkerRetriesTaskDeliveredBeforeAcknowledgement(t *testing.T) {
+	ledger, _, campaign, now := newTestLedger(t, 1)
+	worker, err := NewWorker(WorkerConfig{Ledger: ledger, Now: func() time.Time { return now }})
+	requireNoError(t, err)
+	task, err := NewTask(TaskPayload{
+		Version: PayloadVersion, CampaignID: campaign.ID, Sink: TaskSinkDryRun,
+		Algorithm: campaign.Algorithm, Seed: campaign.Seed, Count: campaign.Total, First: 1, Last: 1,
+	})
+	requireNoError(t, err)
+
+	if err := worker.ProcessTask(context.Background(), task); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("expected retryable pre-acknowledgement error, got %v", err)
+	}
+	requireNoError(t, ledger.Acknowledge(context.Background(), campaign.ID, AcknowledgeRequest{Start: 1, End: 1, Now: now}))
+	requireNoError(t, worker.ProcessTask(context.Background(), task))
+
+	snapshot, err := ledger.Snapshot(context.Background(), campaign.ID)
+	requireNoError(t, err)
+	if !snapshot.IsTerminal() || snapshot.Completed != 1 {
+		t.Fatalf("unexpected recovered snapshot: %+v", snapshot)
+	}
+}
