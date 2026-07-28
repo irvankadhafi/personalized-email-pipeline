@@ -52,12 +52,15 @@ type reportDocument struct {
 	Cancelled                      bool                     `json:"cancelled"`
 	Fatal                          bool                     `json:"fatal"`
 	Proportions                    *reportProportions       `json:"proportions,omitempty"`
+	Mode                           *ModeEvidence            `json:"mode,omitempty"`
+	TestDelivery                   *TestDeliveryEvidence    `json:"test_delivery,omitempty"`
+	Distributed                    *DistributedEvidence     `json:"distributed,omitempty"`
 }
 
 func MarshalReport(report RunReport) ([]byte, error) {
-	if report.Counts.Validate() != nil || report.Started != report.Counts.Completed+report.Counts.Failed ||
+	if !validOptionalEvidence(report) || report.Counts.Validate() != nil || report.Started != report.Counts.Completed+report.Counts.Failed ||
 		report.Outcome != DeriveOutcome(report.Counts, report.Cancelled, report.Fatal) ||
-		(report.Fatal && report.AccountingScope != "prefix_only") ||
+		(report.Fatal && report.AccountingScope != "prefix_only" && report.AccountingScope != "unknown") ||
 		(!report.Fatal && report.AccountingScope != "full") {
 		return nil, ErrReportInvariant
 	}
@@ -72,6 +75,7 @@ func MarshalReport(report RunReport) ([]byte, error) {
 		},
 		InvalidReasons: report.InvalidReasons, FailedReasons: report.FailedReasons,
 		Samples: reportSamples(report.Samples), Cancelled: report.Cancelled, Fatal: report.Fatal,
+		Mode: report.Mode, TestDelivery: report.TestDelivery, Distributed: report.Distributed,
 	}
 	if report.Fatal {
 		return json.Marshal(document)
@@ -93,6 +97,15 @@ func MarshalReport(report RunReport) ([]byte, error) {
 		Invalid: ratio(report.Counts.Invalid, report.Counts.Examined), Duplicate: ratio(report.Counts.Duplicate, report.Counts.Examined),
 		Failed: ratio(report.Counts.Failed, report.Counts.Eligible), Unprocessed: ratio(report.Counts.Unprocessed, report.Counts.Eligible),
 	}
+	if report.Mode != nil && report.Mode.Backend == BackendAsynq {
+		document.PeakHeapInuseBytes = nil
+		document.HeapSampleIntervalMilliseconds = nil
+		document.Workers = nil
+		document.QueueCapacity = nil
+		document.ResponseBoundMilliseconds = nil
+		document.MeasuredResponseMilliseconds = nil
+		document.SettlementMilliseconds = nil
+	}
 	if elapsed > 0 {
 		examinedRate := float64(report.Counts.Examined) / elapsed
 		completedRate := float64(report.Counts.Completed) / elapsed
@@ -100,6 +113,44 @@ func MarshalReport(report RunReport) ([]byte, error) {
 		document.CompletedRenderingsPerSecond = &completedRate
 	}
 	return json.Marshal(document)
+}
+
+func validOptionalEvidence(report RunReport) bool {
+	if report.Mode == nil {
+		return report.TestDelivery == nil && report.Distributed == nil && report.AccountingScope != "unknown"
+	}
+	mode := *report.Mode
+	if mode.Backend == BackendLocal && mode.Sink == SinkTestInbox {
+		evidence := report.TestDelivery
+		return evidence != nil && report.Distributed == nil && evidence.Confirmed >= 0 && evidence.Rejected >= 0 &&
+			evidence.Transport >= 0 && evidence.Indeterminate >= 0 && evidence.Confirmed == report.Counts.Completed &&
+			evidence.Rejected+evidence.Transport+evidence.Indeterminate == report.Counts.Failed && report.AccountingScope != "unknown"
+	}
+	if mode.Backend == BackendAsynq {
+		evidence := report.Distributed
+		if evidence == nil || evidence.KnownEnqueued < 0 || evidence.KnownTerminal < 0 ||
+			evidence.Unknown < 0 || evidence.KnownTerminal > evidence.KnownEnqueued {
+			return false
+		}
+		if mode.Sink == SinkDryRun && report.TestDelivery != nil {
+			return false
+		}
+		if mode.Sink == SinkTestInbox {
+			delivery := report.TestDelivery
+			if delivery == nil || delivery.Confirmed < 0 || delivery.Rejected < 0 || delivery.Transport < 0 || delivery.Indeterminate < 0 ||
+				delivery.Confirmed != report.Counts.Completed || delivery.Rejected+delivery.Transport+delivery.Indeterminate != report.Counts.Failed {
+				return false
+			}
+		} else if mode.Sink != SinkDryRun {
+			return false
+		}
+		if report.AccountingScope == "unknown" {
+			return report.Fatal && report.Outcome == Failure && evidence.Unknown > 0
+		}
+		return evidence.Unknown == 0
+	}
+	return mode.Backend == BackendLocal && mode.Sink == SinkDryRun && report.TestDelivery == nil &&
+		report.Distributed == nil && report.AccountingScope != "unknown"
 }
 
 func reportSamples(samples Samples) []reportSample {

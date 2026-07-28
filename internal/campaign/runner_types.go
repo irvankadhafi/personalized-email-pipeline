@@ -42,6 +42,38 @@ type ReasonSummary struct {
 	Omitted  int64   `json:"omitted"`
 }
 
+type Backend string
+
+const (
+	BackendLocal Backend = "local"
+	BackendAsynq Backend = "asynq"
+)
+
+type Sink string
+
+const (
+	SinkDryRun    Sink = "dry-run"
+	SinkTestInbox Sink = "test-inbox"
+)
+
+type ModeEvidence struct {
+	Backend Backend `json:"backend"`
+	Sink    Sink    `json:"sink"`
+}
+
+type TestDeliveryEvidence struct {
+	Confirmed     int64 `json:"confirmed"`
+	Rejected      int64 `json:"rejected"`
+	Transport     int64 `json:"transport"`
+	Indeterminate int64 `json:"indeterminate"`
+}
+
+type DistributedEvidence struct {
+	KnownEnqueued int64 `json:"known_enqueued"`
+	KnownTerminal int64 `json:"known_terminal"`
+	Unknown       int64 `json:"unknown"`
+}
+
 type RunReport struct {
 	Outcome            Outcome
 	AccountingScope    string
@@ -58,6 +90,9 @@ type RunReport struct {
 	Cancelled          bool
 	Fatal              bool
 	Started            int64
+	Mode               *ModeEvidence
+	TestDelivery       *TestDeliveryEvidence
+	Distributed        *DistributedEvidence
 }
 
 type job struct {
