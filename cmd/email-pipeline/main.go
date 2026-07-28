@@ -9,9 +9,10 @@ const usage = `email-pipeline performs personalized-email demonstrations.
 
 Usage:
   email-pipeline generate --output PATH [--count N] [--seed N] [--algorithm v1]
-  email-pipeline run --input PATH [--backend local] [--sink dry-run]
-  email-pipeline run --backend local|asynq --sink dry-run|test-inbox --count N [options]
+  email-pipeline run --input PATH [--backend local] [--sink dry-run] [--format text|html]
+  email-pipeline run --backend local|asynq --sink dry-run|test-inbox --count N [--format text|html] [options]
   email-pipeline worker --sink dry-run|test-inbox [--concurrency N] [--shutdown-timeout 5s]
+  email-pipeline web [--listen 127.0.0.1:8080]
   email-pipeline help
 
 Exit codes: 0 success, 1 failure, 2 partial success, 130 interrupted.
@@ -42,6 +43,8 @@ func execute(args []string, stdout, stderr io.Writer) (code int) {
 		return runCommand(args[1:], stdout, stderr)
 	case "worker":
 		return workerCommand(args[1:], stdout, stderr)
+	case "web":
+		return webCommand(args[1:], stdout, stderr)
 	default:
 		_, _ = io.WriteString(stderr, "error: invalid_command\n")
 		return 1
