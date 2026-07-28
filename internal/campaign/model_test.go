@@ -43,3 +43,19 @@ func TestBoundedSamplesKeepLowestOrdinals(t *testing.T) {
 		t.Fatalf("samples = %#v, want ordinals 1,2", got)
 	}
 }
+
+func TestOptionalReasonsAreClosedValues(t *testing.T) {
+	want := []Reason{
+		ReasonGuardRefused,
+		ReasonDeliveryRejected,
+		ReasonDeliveryIndeterminate,
+		ReasonDistributedRetryExhausted,
+		ReasonCompletionDeadline,
+		ReasonDistributedStateUnknown,
+	}
+	for _, reason := range want {
+		if reason == "" {
+			t.Fatal("optional reason is empty")
+		}
+	}
+}

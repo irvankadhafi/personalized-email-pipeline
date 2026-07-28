@@ -24,18 +24,24 @@ const (
 type Reason string
 
 const (
-	ReasonBlankRecord     Reason = "blank_record"
-	ReasonFieldCount      Reason = "field_count"
-	ReasonInvalidCSV      Reason = "invalid_csv"
-	ReasonInvalidUTF8     Reason = "invalid_utf8"
-	ReasonOversizedRecord Reason = "oversized_record"
-	ReasonMissingEmail    Reason = "missing_email"
-	ReasonInvalidEmail    Reason = "invalid_email"
-	ReasonRender          Reason = "render_failed"
-	ReasonSink            Reason = "sink_rejected"
-	ReasonInterrupted     Reason = "interrupted"
-	ReasonFatalInput      Reason = "fatal_input"
-	ReasonUntrustworthy   Reason = "untrustworthy_accounting"
+	ReasonBlankRecord               Reason = "blank_record"
+	ReasonFieldCount                Reason = "field_count"
+	ReasonInvalidCSV                Reason = "invalid_csv"
+	ReasonInvalidUTF8               Reason = "invalid_utf8"
+	ReasonOversizedRecord           Reason = "oversized_record"
+	ReasonMissingEmail              Reason = "missing_email"
+	ReasonInvalidEmail              Reason = "invalid_email"
+	ReasonRender                    Reason = "render_failed"
+	ReasonSink                      Reason = "sink_rejected"
+	ReasonInterrupted               Reason = "interrupted"
+	ReasonFatalInput                Reason = "fatal_input"
+	ReasonUntrustworthy             Reason = "untrustworthy_accounting"
+	ReasonGuardRefused              Reason = "guard_refused"
+	ReasonDeliveryRejected          Reason = "delivery_rejected"
+	ReasonDeliveryIndeterminate     Reason = "delivery_indeterminate"
+	ReasonDistributedRetryExhausted Reason = "distributed_retry_exhausted"
+	ReasonCompletionDeadline        Reason = "completion_deadline"
+	ReasonDistributedStateUnknown   Reason = "distributed_state_unknown"
 )
 
 type Recipient struct {
