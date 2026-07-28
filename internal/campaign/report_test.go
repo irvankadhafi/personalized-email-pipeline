@@ -23,7 +23,7 @@ func TestMarshalReportIncludesPerformanceAndSafeSamples(t *testing.T) {
 	if strings.Contains(string(data), "@") || !strings.Contains(string(data), `"completed_renderings_per_second":1`) {
 		t.Fatalf("report=%s", data)
 	}
-	for _, optional := range []string{`"mode"`, `"test_delivery"`, `"distributed"`} {
+	for _, optional := range []string{`"mode"`, `"test_delivery"`, `"distributed"`, `"format"`, `"page_duration"`} {
 		if strings.Contains(string(data), optional) {
 			t.Fatalf("local report contains optional section %s: %s", optional, data)
 		}
