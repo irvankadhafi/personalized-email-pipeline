@@ -25,10 +25,11 @@ func runCommand(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	options := runOptions{}
-	var backend, sink string
+	var backend, sink, format string
 	flags.StringVar(&options.input, "input", "", "input CSV path")
 	flags.StringVar(&backend, "backend", string(campaign.BackendLocal), "execution backend")
 	flags.StringVar(&sink, "sink", string(campaign.SinkDryRun), "message sink")
+	flags.StringVar(&format, "format", campaign.TextFormat.String(), "message format: text or html")
 	flags.Int64Var(&options.count, "count", 0, "generated recipient count")
 	flags.Uint64Var(&options.seed, "seed", 1, "fixture seed")
 	flags.StringVar(&options.algorithm, "algorithm", recipientcsv.FixtureAlgorithmV1, "fixture algorithm")
@@ -47,6 +48,11 @@ func runCommand(args []string, stdout, stderr io.Writer) int {
 		}
 	})
 	options.backend, options.sink = campaign.Backend(backend), campaign.Sink(sink)
+	var err error
+	options.format, err = campaign.ParseFormat(format)
+	if err != nil {
+		return staticError(stderr, "guard_refused")
+	}
 	if options.validate() != nil {
 		return staticError(stderr, "guard_refused")
 	}
@@ -74,8 +80,8 @@ func runLocal(options runOptions, stdout, stderr io.Writer) int {
 	report := campaign.Run(ctx, func() (campaign.SourceRecord, bool, error) {
 		record, ok := source.Next()
 		return campaign.SourceRecord{Ordinal: record.Ordinal, Email: record.Email, Name: record.Name}, ok, nil
-	}, campaign.RunConfig{Workers: options.workers, Settlement: options.settlement, Sink: func(ctx context.Context, body []byte) error {
-		result := smtp.Deliver(ctx, body)
+	}, campaign.RunConfig{Workers: options.workers, Settlement: options.settlement, Format: options.format, MessageSink: func(ctx context.Context, message campaign.RenderedMessage) error {
+		result := smtp.DeliverMessage(ctx, message)
 		switch result.Status {
 		case testinbox.DeliveryConfirmed:
 			confirmed.Add(1)
@@ -112,7 +118,7 @@ func runLocalFile(ctx context.Context, options runOptions, stdout, stderr io.Wri
 	report := campaign.Run(ctx, func() (campaign.SourceRecord, bool, error) {
 		record, ok, readErr := reader.Next()
 		return campaign.SourceRecord{Ordinal: record.Ordinal, Email: record.Email, Name: record.Name, ParserReason: record.Reason}, ok, readErr
-	}, campaign.RunConfig{Workers: options.workers, Settlement: options.settlement})
+	}, campaign.RunConfig{Workers: options.workers, Settlement: options.settlement, Format: options.format})
 	if options.exposeMode {
 		report.Mode = &campaign.ModeEvidence{Backend: options.backend, Sink: options.sink}
 	}
@@ -157,7 +163,7 @@ func runDistributed(options runOptions, stdout, stderr io.Writer) int {
 			Created: now, Deadline: now.Add(options.completionDeadline), Version: distributed.LedgerVersion,
 			Policy: policy, DeliveryLimit: deliveryLimit,
 		},
-		Sink: taskSink, TaskSize: options.taskSize, MaxRetry: options.maxRetry,
+		Sink: taskSink, Format: options.format, TaskSize: options.taskSize, MaxRetry: options.maxRetry,
 		Retention: time.Hour, EnqueueTimeout: 5 * time.Second, PollInterval: 10 * time.Millisecond,
 	})
 	if err != nil {

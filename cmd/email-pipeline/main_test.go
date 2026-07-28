@@ -95,6 +95,7 @@ func TestTestInboxGuardRefusesBeforeConfiguration(t *testing.T) {
 	t.Setenv("EMAIL_PIPELINE_SMTP_PASSWORD", "SECRET_CREDENTIAL")
 	tests := [][]string{
 		{"run", "--backend", "local", "--sink", "test-inbox", "--count", "1"},
+		{"run", "--backend", "local", "--sink", "test-inbox", "--count", "1", "--confirm-test-inbox", testInboxConfirmation, "--format", "markdown"},
 		{"run", "--backend", "asynq", "--sink", "test-inbox", "--count", "11", "--confirm-test-inbox", testInboxConfirmation},
 		{"run", "--backend", "asynq", "--sink", "test-inbox", "--input", "private.csv", "--confirm-test-inbox", testInboxConfirmation},
 	}
@@ -117,6 +118,21 @@ func TestAsynqFailureDoesNotFallbackLocally(t *testing.T) {
 	if code != 1 || strings.Contains(stdout.String(), `"completed":1`) ||
 		!strings.Contains(stdout.String(), `"accounting_scope":"unknown"`) ||
 		!strings.Contains(stdout.String(), `"unknown":1`) || stderr.Len() != 0 {
+		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestAsynqHTMLPassesFormatValidationBeforeRedisConnection(t *testing.T) {
+	// Given
+	t.Setenv("EMAIL_PIPELINE_REDIS_ADDR", "127.0.0.1:1")
+	t.Setenv("EMAIL_PIPELINE_REDIS_DB", "0")
+	var stdout, stderr bytes.Buffer
+
+	// When
+	code := execute([]string{"run", "--backend", "asynq", "--sink", "dry-run", "--format", "html", "--count", "1", "--completion-deadline", "10ms"}, &stdout, &stderr)
+
+	// Then
+	if code != 1 || stderr.Len() != 0 || !strings.Contains(stdout.String(), `"accounting_scope":"unknown"`) {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 }

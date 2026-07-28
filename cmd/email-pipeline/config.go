@@ -22,6 +22,7 @@ type runOptions struct {
 	input              string
 	backend            campaign.Backend
 	sink               campaign.Sink
+	format             campaign.Format
 	count              int64
 	seed               uint64
 	algorithm          string
