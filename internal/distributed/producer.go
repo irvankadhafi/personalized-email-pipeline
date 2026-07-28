@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/irvankadhafi/personalized-email-pipeline/internal/campaign"
 )
 
 var (
@@ -27,6 +28,7 @@ type ProducerConfig struct {
 	Inspector      TaskInspector
 	Campaign       Campaign
 	Sink           TaskSink
+	Format         campaign.Format
 	TaskSize       int64
 	MaxRetry       int
 	Retention      time.Duration
@@ -179,7 +181,7 @@ func (p *Producer) enqueueRange(first, last int64) (bool, error) {
 	payload := TaskPayload{
 		Version: PayloadVersion, CampaignID: p.config.Campaign.ID, Sink: p.config.Sink,
 		Algorithm: p.config.Campaign.Algorithm, Seed: p.config.Campaign.Seed, Count: p.config.Campaign.Total,
-		First: first, Last: last,
+		First: first, Last: last, Format: p.config.Format,
 	}
 	task, err := NewTask(payload)
 	if err != nil {

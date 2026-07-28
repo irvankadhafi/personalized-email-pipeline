@@ -1,6 +1,7 @@
 package distributed
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -8,7 +9,105 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/irvankadhafi/personalized-email-pipeline/internal/campaign"
 )
+
+func TestProducerPropagatesFormatWithoutChangingTaskIdentityOrQueue(t *testing.T) {
+	tests := []struct {
+		name       string
+		format     campaign.Format
+		wantMember bool
+	}{
+		{name: "default text", format: campaign.TextFormat},
+		{name: "explicit html", format: campaign.HTMLFormat, wantMember: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Given
+			ledger, _, distributedCampaign, now := newTestLedger(t, 3)
+			keys := campaignKeys(distributedCampaign.ID)
+			requireNoError(t, ledger.client.Del(context.Background(), keys[:]...).Err())
+			enqueuer := &fakeEnqueuer{}
+			producer, err := NewProducer(ProducerConfig{
+				Ledger: ledger, Enqueuer: enqueuer, Campaign: distributedCampaign, Sink: TaskSinkDryRun,
+				Format: test.format, TaskSize: 2, MaxRetry: 3, Retention: time.Hour,
+				EnqueueTimeout: time.Second, Now: func() time.Time { return now },
+			})
+			requireNoError(t, err)
+
+			// When
+			_, err = producer.Enqueue(context.Background())
+			requireNoError(t, err)
+
+			// Then
+			for index, call := range enqueuer.calls {
+				payload, decodeErr := DecodeTask(call.task)
+				requireNoError(t, decodeErr)
+				if payload.Format != test.format {
+					t.Fatalf("task %d format=%q", index, payload.Format.String())
+				}
+				hasMember := bytes.Contains(call.task.Payload(), []byte(`"format"`))
+				if hasMember != test.wantMember || call.taskID != TaskID(distributedCampaign.ID, payload.First, payload.Last) || call.queue != TaskTypeDryRun {
+					t.Fatalf("task %d call=%+v payload=%s", index, call, call.task.Payload())
+				}
+			}
+		})
+	}
+}
+
+func TestProducerRejectsOppositeFormatDuplicateBeforeEnqueue(t *testing.T) {
+	tests := []struct {
+		name         string
+		firstFormat  campaign.Format
+		secondFormat campaign.Format
+	}{
+		{name: "text first html second", firstFormat: campaign.TextFormat, secondFormat: campaign.HTMLFormat},
+		{name: "html first text second", firstFormat: campaign.HTMLFormat, secondFormat: campaign.TextFormat},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Given
+			ledger, _, distributedCampaign, now := newTestLedger(t, 2)
+			keys := campaignKeys(distributedCampaign.ID)
+			requireNoError(t, ledger.client.Del(context.Background(), keys[:]...).Err())
+			firstEnqueuer := &fakeEnqueuer{}
+			firstProducer, err := NewProducer(ProducerConfig{
+				Ledger: ledger, Enqueuer: firstEnqueuer, Campaign: distributedCampaign, Sink: TaskSinkDryRun,
+				Format: test.firstFormat, TaskSize: 2, MaxRetry: 3, Retention: time.Hour,
+				EnqueueTimeout: time.Second, Now: func() time.Time { return now },
+			})
+			requireNoError(t, err)
+			_, err = firstProducer.Enqueue(context.Background())
+			requireNoError(t, err)
+			before, err := ledger.Snapshot(context.Background(), distributedCampaign.ID)
+			requireNoError(t, err)
+
+			secondEnqueuer := &fakeEnqueuer{}
+			secondProducer, err := NewProducer(ProducerConfig{
+				Ledger: ledger, Enqueuer: secondEnqueuer, Campaign: distributedCampaign, Sink: TaskSinkDryRun,
+				Format: test.secondFormat, TaskSize: 2, MaxRetry: 3, Retention: time.Hour,
+				EnqueueTimeout: time.Second, Now: func() time.Time { return now },
+			})
+			requireNoError(t, err)
+
+			// When
+			_, err = secondProducer.Enqueue(context.Background())
+
+			// Then
+			if !errors.Is(err, ErrAlreadyExists) {
+				t.Fatalf("expected ErrAlreadyExists, got %v", err)
+			}
+			if len(secondEnqueuer.calls) != 0 {
+				t.Fatalf("expected no enqueue calls, got %d", len(secondEnqueuer.calls))
+			}
+			after, snapshotErr := ledger.Snapshot(context.Background(), distributedCampaign.ID)
+			requireNoError(t, snapshotErr)
+			if after != before {
+				t.Fatalf("ledger snapshot changed: before=%+v after=%+v", before, after)
+			}
+		})
+	}
+}
 
 type enqueueCall struct {
 	task      *asynq.Task
