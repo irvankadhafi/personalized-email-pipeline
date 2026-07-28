@@ -55,17 +55,58 @@ func TestCLIArtifactsExcludeCanaries(t *testing.T) {
 	}
 }
 
-func TestRuntimeDependencyGraphHasNoNetworkPackages(t *testing.T) {
+func TestDefaultPathIgnoresOptionalNetworkConfiguration(t *testing.T) {
 	root := filepath.Clean(filepath.Join("..", ".."))
-	command := exec.Command("go", "list", "-deps", "-f", "{{.ImportPath}}", "./cmd/email-pipeline")
-	command.Dir = root
-	output, err := command.Output()
-	if err != nil {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "recipients.csv")
+	if err := os.WriteFile(input, []byte("email,name\nrecipient@example.test,Recipient\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, imported := range strings.Fields(string(output)) {
-		if imported == "net" || strings.HasPrefix(imported, "net/") {
-			t.Fatalf("dial-capable dependency: %s", imported)
+	command := exec.Command("go", "run", "./cmd/email-pipeline", "run", "--input", input, "--workers", "1")
+	command.Dir = root
+	command.Env = append(os.Environ(),
+		"EMAIL_PIPELINE_REDIS_ADDR=127.0.0.1:1",
+		"EMAIL_PIPELINE_REDIS_DB=0",
+		"EMAIL_PIPELINE_SMTP_HOST=127.0.0.1",
+		"EMAIL_PIPELINE_SMTP_PORT=1",
+		"EMAIL_PIPELINE_SMTP_USERNAME=SECRET_CREDENTIAL_USERNAME",
+		"EMAIL_PIPELINE_SMTP_PASSWORD=SECRET_CREDENTIAL_PASSWORD",
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("default subprocess failed: %s", output)
+	}
+	if !strings.Contains(string(output), `"outcome":"success"`) {
+		t.Fatalf("default path did not complete: %s", output)
+	}
+	for _, canary := range []string{"SECRET_CREDENTIAL_USERNAME", "SECRET_CREDENTIAL_PASSWORD", "127.0.0.1:1"} {
+		if strings.Contains(string(output), canary) {
+			t.Fatalf("optional configuration leaked: %q", canary)
+		}
+	}
+}
+
+func TestOptionalFailureOutputExcludesConfigurationCanaries(t *testing.T) {
+	root := filepath.Clean(filepath.Join("..", ".."))
+	command := exec.Command("go", "run", "./cmd/email-pipeline", "run", "--backend", "asynq", "--sink", "dry-run", "--count", "1", "--completion-deadline", "10ms")
+	command.Dir = root
+	canaries := []string{"SECRET_REDIS_USERNAME", "SECRET_REDIS_PASSWORD", "127.0.0.1:1"}
+	command.Env = append(os.Environ(),
+		"EMAIL_PIPELINE_REDIS_ADDR="+canaries[2],
+		"EMAIL_PIPELINE_REDIS_USERNAME="+canaries[0],
+		"EMAIL_PIPELINE_REDIS_PASSWORD="+canaries[1],
+		"EMAIL_PIPELINE_REDIS_DB=0",
+	)
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatal("optional subprocess unexpectedly succeeded")
+	}
+	if !strings.Contains(string(output), `"accounting_scope":"unknown"`) {
+		t.Fatalf("missing unknown-state report: %s", output)
+	}
+	for _, canary := range canaries {
+		if strings.Contains(string(output), canary) {
+			t.Fatalf("optional failure leaked configuration: %q", canary)
 		}
 	}
 }
