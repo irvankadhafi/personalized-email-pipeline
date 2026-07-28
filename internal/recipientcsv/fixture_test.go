@@ -70,6 +70,42 @@ func TestGenerateGoldenV1(t *testing.T) {
 	}
 }
 
+func TestGeneratedSourceMatchesGeneratedCSV(t *testing.T) {
+	opts := FixtureOptions{Algorithm: FixtureAlgorithmV1, Seed: 7, Count: 11}
+	var csvOutput bytes.Buffer
+	wantSummary, err := Generate(&csvOutput, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := NewReader(bytes.NewReader(csvOutput.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := NewGeneratedSource(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		want, wantOK, err := reader.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, gotOK := source.Next()
+		if gotOK != wantOK {
+			t.Fatalf("source availability = %v, want %v", gotOK, wantOK)
+		}
+		if !gotOK {
+			break
+		}
+		if got.Ordinal != want.Ordinal || got.Email != want.Email || got.Name != want.Name {
+			t.Fatalf("source record = %#v, want %#v", got, want)
+		}
+	}
+	if got := source.Summary(); !reflect.DeepEqual(got, wantSummary) {
+		t.Fatalf("source summary = %#v, want %#v", got, wantSummary)
+	}
+}
+
 func TestGenerateZeroAndInvalid(t *testing.T) {
 	var got bytes.Buffer
 	summary, err := Generate(&got, FixtureOptions{Seed: 1, Count: 0})

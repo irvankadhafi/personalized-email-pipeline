@@ -27,30 +27,65 @@ type FixtureSummary struct {
 	Fallback  int64  `json:"fallback"`
 }
 
-func Generate(w io.Writer, opts FixtureOptions) (FixtureSummary, error) {
+type GeneratedSource struct {
+	rng     *rand.Rand
+	summary FixtureSummary
+	next    int64
+}
+
+func NewGeneratedSource(opts FixtureOptions) (*GeneratedSource, error) {
 	if opts.Algorithm == "" {
 		opts.Algorithm = FixtureAlgorithmV1
 	}
 	if opts.Algorithm != FixtureAlgorithmV1 || opts.Count < 0 {
-		return FixtureSummary{}, errors.New("invalid fixture configuration")
+		return nil, errors.New("invalid fixture configuration")
 	}
-	summary := FixtureSummary{Algorithm: opts.Algorithm, Seed: opts.Seed, Count: opts.Count}
+	return &GeneratedSource{
+		rng: rand.New(rand.NewPCG(opts.Seed, fixtureStateTwo)),
+		summary: FixtureSummary{
+			Algorithm: opts.Algorithm,
+			Seed:      opts.Seed,
+			Count:     opts.Count,
+		},
+		next: 1,
+	}, nil
+}
+
+func (s *GeneratedSource) Next() (Record, bool) {
+	if s.next > s.summary.Count {
+		return Record{}, false
+	}
+	ordinal := s.next
+	s.next++
+	name := ""
+	if ordinal%2 == 1 {
+		name = fmt.Sprintf("Customer %06d", ordinal)
+		s.summary.Named++
+	} else {
+		s.summary.Fallback++
+	}
+	return Record{
+		Ordinal: ordinal,
+		Email:   fmt.Sprintf("recipient-%06d-%016x@example.test", ordinal, s.rng.Uint64()),
+		Name:    name,
+	}, true
+}
+
+func (s *GeneratedSource) Summary() FixtureSummary {
+	return s.summary
+}
+
+func Generate(w io.Writer, opts FixtureOptions) (FixtureSummary, error) {
+	source, err := NewGeneratedSource(opts)
+	if err != nil {
+		return FixtureSummary{}, err
+	}
 	csvw := csv.NewWriter(w)
 	if err := csvw.Write([]string{"email", "name"}); err != nil {
 		return FixtureSummary{}, errors.New("fixture write failed")
 	}
-	rng := rand.New(rand.NewPCG(opts.Seed, fixtureStateTwo))
-	for i := int64(1); i <= opts.Count; i++ {
-		token := rng.Uint64()
-		name := ""
-		if i%2 == 1 {
-			name = fmt.Sprintf("Customer %06d", i)
-			summary.Named++
-		} else {
-			summary.Fallback++
-		}
-		email := fmt.Sprintf("recipient-%06d-%016x@example.test", i, token)
-		if err := csvw.Write([]string{email, name}); err != nil {
+	for record, ok := source.Next(); ok; record, ok = source.Next() {
+		if err := csvw.Write([]string{record.Email, record.Name}); err != nil {
 			return FixtureSummary{}, errors.New("fixture write failed")
 		}
 	}
@@ -58,5 +93,5 @@ func Generate(w io.Writer, opts FixtureOptions) (FixtureSummary, error) {
 	if csvw.Error() != nil {
 		return FixtureSummary{}, errors.New("fixture write failed")
 	}
-	return summary, nil
+	return source.Summary(), nil
 }
