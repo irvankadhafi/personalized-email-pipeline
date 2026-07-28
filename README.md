@@ -1,12 +1,14 @@
 # Personalized email pipeline
 
-This repository processes one million personalized promotional emails quickly and safely as a proof of concept. The default command renders every message and consumes it through an in-memory SHA-256 sink. It does not contact an email server. Optional modes demonstrate bounded test-inbox delivery and Asynq/Redis execution without changing the default path.
+This repository is a Go proof of concept for processing one million personalized promotional emails. The default path is deliberately offline: it renders every complete message and passes the bytes to an in-memory SHA-256 sink. It never opens an SMTP connection.
 
 A recipient is complete only after the full personalized message has been rendered and accepted by the selected sink.
 
 ## Table of contents
 
-- [Assignment fit](#assignment-fit)
+- [At a glance](#at-a-glance)
+- [Quick review](#quick-review)
+- [Assignment challenge](#assignment-challenge)
 - [Design summary](#design-summary)
 - [Build and quick start](#build-and-quick-start)
 - [Small reproducible proof](#small-reproducible-proof)
@@ -20,9 +22,53 @@ A recipient is complete only after the full personalized message has been render
 - [AI-assisted development](#ai-assisted-development)
 - [Limitations](#limitations)
 
-## Assignment fit
+## At a glance
 
-The original task asks for a script or small page that handles a list of 1,000,000 customer email addresses, sends the same promotional message personalized with each recipient's name, finishes as fast as reasonably possible, and never emails real recipients.
+| Item | Evidence |
+|---|---|
+| Authoritative path | Service-free CLI with streaming CSV input, bounded workers, exact deduplication, and a local digest sink |
+| Recorded scale | 1,000,000 records completed with balanced accounting |
+| Recorded processing time | 3.123577 seconds on an Apple M3 Pro with 11 logical CPUs |
+| Delivery safety | No real delivery on the default path; optional SMTP is restricted to a generated fixture and one allowlisted test inbox |
+| Interactive review | Loopback-only evaluator with bounded synthetic input and no recipient upload |
+| Development record | Requirements, implementation plans, commit history, and a [readable AI transcript](transcripts/README.md) backed by checksummed JSON |
+
+## Quick review
+
+Build the binary, run the four-record fixture, then open the local evaluator:
+
+```sh
+go build -trimpath -o bin/email-pipeline ./cmd/email-pipeline
+bin/email-pipeline generate --output proof.csv --count 4 --seed 7
+bin/email-pipeline run --input proof.csv --workers 2 --format=text
+bin/email-pipeline web --listen 127.0.0.1:8080
+```
+
+The four-record run covers both greeting branches: two records have names and two use the fallback. For the full performance evidence, see [One-million-record proof](#one-million-record-proof). The [AI development transcript](transcripts/README.md) links the readable conversation, prompt provenance, raw JSON, and checksums.
+
+## Assignment challenge
+
+The assignment brief asks for a script or small page that handles 1,000,000 customer email addresses, personalizes one promotional message with each customer's name, finishes as fast as reasonably possible, and never emails a real recipient. It also treats the AI-assisted development conversation as part of the submission.
+
+The requirements pull in different directions. A credible performance result must do the personalization work, but a literal bulk send would violate the safety constraint. A fast loop alone is not enough either: the result needs to show which records were examined, rejected, deduplicated, completed, or left unfinished.
+
+The brief explicitly leaves room for assumptions rather than prescribing one correct architecture. I made those assumptions visible before implementation and treated them as contracts that the tests and benchmark had to prove.
+
+I had prior experience with Asynq and Redis, so a distributed queue was a natural option to consider. I did not make it the required path. For this assessment, an in-process worker pool is faster to evaluate, easier to reproduce, and sufficient for the one-million-record proof. Asynq remains an optional mode that demonstrates durable accounting, retries, idempotency, and separate workers without forcing infrastructure onto the core submission.
+
+The main assumptions and decisions are:
+
+| Challenge | Decision | Why it matters |
+|---|---|---|
+| Prove "send" without real delivery | Render the complete message and require acceptance by a local SHA-256 sink | The benchmark performs the message work while remaining network-free |
+| Define completion precisely | Count a recipient only after rendering and sink acceptance | Prevents queued, partially rendered, or abandoned work from being reported as complete |
+| Process one million records quickly | Stream CSV records into bounded worker queues | Avoids loading one million message bodies into memory and limits concurrency |
+| Preserve personalization evidence without leaking data | Report synthetic ordinal samples and aggregate counts | Shows named and fallback branches without exposing supplied addresses, names, or bodies |
+| Handle malformed rows and duplicates | Validate offline, normalize conservatively, and keep the first valid identity | Produces deterministic accounting without provider-specific address rewriting |
+| Make the result reproducible | Separate deterministic fixture generation from measured campaign processing | Keeps data-generation time out of the processing benchmark and gives the fixture a stable hash |
+| Include the AI work record | Commit a readable Markdown transcript generated from compact JSON exports with message metadata, delegated prompts, and SHA-256 manifests | Makes the development trail reviewable without committing private reasoning or bulky tool payloads |
+
+The implementation maps back to the brief as follows:
 
 | Assignment requirement | Implementation and evidence |
 |---|---|
@@ -31,9 +77,9 @@ The original task asks for a script or small page that handles a list of 1,000,0
 | Finish quickly | The reference run completed campaign processing in 3.123577 seconds on an Apple M3 Pro. Reproduction commands and machine details are documented below. |
 | Do not email real recipients | The default sink is local and network-free. Optional SMTP accepts only a generated fixture of at most 10 records, requires an exact confirmation token, and sends every message to one independently allowlisted test destination. Fixture addresses use the reserved `.test` domain and are never transport destinations. |
 | Provide working code | The repository contains the CLI, tests, CI workflow, deterministic test data, and repeatable benchmark commands. |
-| Provide all AI prompts | The complete conversation export is a separate submission artifact. The public [AI-assisted development notes](docs/ai-development-workflow.md) explain the workflow and decisions without pretending to replace that export. |
+| Provide all AI prompts | The committed [AI development transcript](transcripts/README.md) presents the user/assistant conversation and delegated sub-agent prompts as readable Markdown, with checksummed JSON as its source. The [AI-assisted development notes](docs/ai-development-workflow.md) explain the workflow and decisions. |
 
-The repository also covers malformed input, duplicates, cancellation, privacy-safe reports, partial failure, and optional distributed execution.
+The required proof stays on the local path. Malformed input, duplicates, cancellation, partial failure, guarded test-inbox delivery, and optional distributed execution are documented extensions rather than prerequisites for the benchmark.
 
 ## Design summary
 
@@ -176,6 +222,18 @@ The result labels campaign-processing elapsed time separately from total server-
 For `Accept: text/plain` on `POST /evaluate`, the body is the compact campaign report followed by exactly one newline. It does not contain format or page timing fields. The selected format is sent in `X-Evaluator-Format`; total server-request duration is sent in `Server-Timing` as `request;dur=...`. Results use `Cache-Control: no-store`.
 
 The exact upstream HTMX 2.0.4 distribution is embedded and served as `/assets/htmx-2.0.4.min.js`; its SHA-256 is `e209dda5c8235479f3166defc7750e1dbcd5a5c1808b7792fc2e6733768fb447`. Its Zero-Clause BSD license is available at `/assets/htmx-LICENSE.txt`.
+
+### Browser evidence
+
+These screenshots were captured from the feature binary on loopback with Playwright. The completed run used count 4, seed 7, and 2 workers. Timing values are machine-specific; the accounting result is the evidence to compare.
+
+| Ready state | Completed text run |
+|---|---|
+| [![Evaluator ready state](docs/screenshots/evaluator-ready.png)](docs/screenshots/evaluator-ready.png) | [![Completed four-record text run](docs/screenshots/evaluator-text-result.png)](docs/screenshots/evaluator-text-result.png) |
+
+The HTML selector updates the independent fixed preview to a sandboxed rendering and escaped source. It does not rerun or alter the completed text report.
+
+[![Sandboxed HTML preview](docs/screenshots/evaluator-html-preview.png)](docs/screenshots/evaluator-html-preview.png)
 
 ## Input contract
 
@@ -366,7 +424,9 @@ Re-run the commands above on the review machine and compare counts and accountin
 
 I built this project with an AI coding agent, but the work did not start with a request to generate the application. I first worked through the product boundaries and failure cases, reviewed the resulting requirements, and only then produced implementation plans. The code was implemented from those checked-in artifacts and followed by automated review, manual CLI exercises, Redis/SMTP integration checks, and a fresh one-million-record run.
 
-The full development account, including why I used Compound Engineering for this project and where I made manual decisions, is in [docs/ai-development-workflow.md](docs/ai-development-workflow.md). It is a readable, sanitized history. The complete original conversation remains a separate submission artifact.
+The work mostly followed Compound Engineering: requirements were settled through `ce-brainstorm`, reviewed before planning, converted into implementation plans, implemented through `ce-work`, and checked again with code review and real-surface verification. Ponytail kept planning focused on the smallest correct path. Debugging was used when observed behavior disagreed with the intended contract, including cancellation timing and evaluator timing.
+
+The [AI development record](transcripts/README.md) contains the complete root and child-agent conversations as checksummed JSON, plus short Markdown pages containing the substantive prompts. The full engineering account, including earlier workflows I considered and where I made manual decisions, is in [docs/ai-development-workflow.md](docs/ai-development-workflow.md).
 
 ## Limitations
 

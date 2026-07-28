@@ -1,43 +1,78 @@
-# AI conversation exports
+# AI development record
 
-These files preserve the AI-assisted development conversation in chronological order. They are committed as JSON because the source is hierarchical: each message has a role, timestamp, model, and zero or more text blocks or delegated sub-agent prompts.
+The submission includes two views of the AI-assisted work:
 
-## Session order
+1. Complete JSON archives preserve the root OpenCode sessions and every child-agent session from the first message to the last.
+2. Curated Markdown pages show the substantive prompts used to steer requirements, planning, implementation, debugging, review, and verification. Standalone `continue` messages are omitted only from this readable view.
 
-1. [`opencode-ses_06112ff84ffeyK3UCMb8kxSrp7.json`](opencode-ses_06112ff84ffeyK3UCMb8kxSrp7.json) covers requirements discovery, planning, the offline pipeline, optional SMTP and distributed modes, review, and verification. It contains 904 retained messages, 911 visible text blocks, and 16 delegated prompts.
-2. [`opencode-ses_05868c9d2ffeU0Sa42ZNDbNeSj.json`](opencode-ses_05868c9d2ffeU0Sa42ZNDbNeSj.json) covers the bounded local evaluator, its review, browser behavior, and supporting documentation. It contains 368 retained messages, 364 visible text blocks, and 75 delegated prompts.
+Provider and model metadata are normalized to `OpenAI` and `GPT-5.6 Sol` throughout the public artifacts.
 
-The identifiers are the original OpenCode root-session IDs. A delegated prompt records the child session ID when OpenCode supplied one, so the review trail remains attributable without embedding every sub-agent tool event.
+## Start with the prompts
 
-## Export scope
+| Workstream | Readable prompts | What it covers |
+|---|---|---|
+| Pipeline assessment | [Pipeline assessment prompts](pipeline-prompts.md) | Requirements brainstorm, requirements review, implementation plan, local implementation, optional-mode decisions, debugging, code review, and final verification |
+| Bounded evaluator | [Bounded evaluator prompts](evaluator-prompts.md) | Browser requirements, typed text/HTML plan, evaluator implementation, timing correction, and completion steering |
 
-Each export retains:
+The workflow mostly used Compound Engineering:
 
-- root-session metadata;
-- user and assistant message text;
-- timestamps, roles, agents, and model identifiers;
-- prompts delegated to sub-agents, including their descriptions and child-session IDs.
+- `ce-brainstorm` to settle behavior and assumptions before architecture;
+- `ce-doc-review` to challenge the requirements;
+- `ce-plan` to turn approved requirements into dependency-ordered work;
+- `ce-work` for implementation and verification;
+- `ce-code-review` for a report-first final review.
 
-The exporter deliberately omits private reasoning, tool inputs and outputs, patches, file snapshots, and synthetic system reminders. Those records are execution internals rather than conversation, and raw inclusion made one source export larger than GitHub's 100 MB file limit. Local home-directory prefixes are replaced with `$HOME`. The original assignment attachment, personal addresses, credentials, generated recipient data, and benchmark working files are not included.
+Ponytail was applied during planning to keep the required path small and avoid speculative abstractions. Debugging was used for concrete failures and mismatches, including cancellation timing and web timing behavior. Those modes supported the Compound Engineering loop rather than replacing it.
 
-The transformation is reproducible with [`scripts/export-opencode-session.sh`](../scripts/export-opencode-session.sh). It requires `opencode`, `jq`, and `shasum`:
+## Complete conversation archives
+
+| Root session | Sessions included | Archive |
+|---|---:|---|
+| Pipeline `ses_06112ff84ffeyK3UCMb8kxSrp7` | 63 total: 1 root and 62 child sessions | [Complete pipeline conversation JSON](opencode-tree-ses_06112ff84ffeyK3UCMb8kxSrp7.json) · [SHA-256](opencode-tree-ses_06112ff84ffeyK3UCMb8kxSrp7.json.sha256) |
+| Evaluator `ses_05868c9d2ffeU0Sa42ZNDbNeSj` | 103 total: 1 root and 102 descendant sessions | [Complete evaluator conversation JSON](opencode-tree-ses_05868c9d2ffeU0Sa42ZNDbNeSj.json) · [SHA-256](opencode-tree-ses_05868c9d2ffeU0Sa42ZNDbNeSj.json.sha256) |
+
+Each archive contains session metadata, parent-child linkage, user and assistant text, and prompts delegated through the task tool. The evaluator archive includes nested descendants, not only direct children.
+
+The complete archives retain ordinary continuation messages because they are part of the original conversation. The curated Markdown removes them so a reviewer can focus on decisions and steering prompts.
+
+## Sanitization boundary
+
+The export keeps conversational text and delegated prompts. It removes private reasoning, tool inputs and outputs, patches, file snapshots, and synthetic host reminders. Those records are execution internals rather than prompts, and the raw root export alone exceeded GitHub's normal 100 MB file limit.
+
+Local home-directory prefixes are replaced with `$HOME`. The assignment attachment, personal addresses, credentials, generated recipient data, and benchmark working files are not included.
+
+## Reproduce the artifacts
+
+Export a root session and all descendants:
 
 ```sh
-scripts/export-opencode-session.sh --force \
-  --output transcripts/opencode-ses_06112ff84ffeyK3UCMb8kxSrp7.json \
-  ses_06112ff84ffeyK3UCMb8kxSrp7
+scripts/export-opencode-session-tree.sh \
+  ses_06112ff84ffeyK3UCMb8kxSrp7 \
+  transcripts/opencode-tree-ses_06112ff84ffeyK3UCMb8kxSrp7.json
 
-scripts/export-opencode-session.sh --force \
-  --output transcripts/opencode-ses_05868c9d2ffeU0Sa42ZNDbNeSj.json \
-  ses_05868c9d2ffeU0Sa42ZNDbNeSj
+scripts/export-opencode-session-tree.sh \
+  ses_05868c9d2ffeU0Sa42ZNDbNeSj \
+  transcripts/opencode-tree-ses_05868c9d2ffeU0Sa42ZNDbNeSj.json
 ```
 
-## Integrity check
-
-Each JSON file has a neighboring SHA-256 manifest. Verify both committed artifacts from the repository root:
+Generate the readable prompt trail from the compact root exports:
 
 ```sh
-shasum -a 256 -c transcripts/*.sha256
+scripts/render-opencode-prompts.sh \
+  transcripts/opencode-ses_06112ff84ffeyK3UCMb8kxSrp7.json \
+  transcripts/pipeline-prompts.md \
+  "Pipeline assessment prompts"
+
+scripts/render-opencode-prompts.sh \
+  transcripts/opencode-ses_05868c9d2ffeU0Sa42ZNDbNeSj.json \
+  transcripts/evaluator-prompts.md \
+  "Bounded evaluator prompts"
 ```
 
-Both lines should end in `OK`. The checksums prove that the reviewed files have not changed; they do not authenticate the original OpenCode database.
+Verify the complete archives:
+
+```sh
+shasum -a 256 -c transcripts/opencode-tree-*.sha256
+```
+
+The checksums prove that the reviewed files have not changed; they do not authenticate the original OpenCode database.

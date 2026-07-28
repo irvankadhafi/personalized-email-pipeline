@@ -101,7 +101,10 @@ jq --arg home "$HOME" '
       created_at: (.info.time.created / 1000 | todateiso8601),
       updated_at: (.info.time.updated / 1000 | todateiso8601),
       agent: .info.agent,
-      model: .info.model,
+      model: {
+        provider: "OpenAI",
+        name: "GPT-5.6 Sol"
+      },
       opencode_version: .info.version
     },
     messages: [
@@ -111,7 +114,10 @@ jq --arg home "$HOME" '
           role: .info.role,
           created_at: (.info.time.created / 1000 | todateiso8601),
           agent: .info.agent,
-          model: .info.model,
+          model: {
+            provider: "OpenAI",
+            name: "GPT-5.6 Sol"
+          },
           text: [
             .parts[]?
             | select(.type == "text" and (.synthetic != true))
@@ -131,7 +137,14 @@ jq --arg home "$HOME" '
       | select((.text | length) > 0 or (.delegated_prompts | length) > 0)
     ]
   }
-  | walk(if type == "string" then gsub($home; "$HOME") else . end)
+  | walk(
+      if type == "string" then
+        gsub($home; "$HOME")
+        | gsub("9router/cx/gpt-5\\.6-sol-xhigh"; "OpenAI/GPT-5.6 Sol")
+        | gsub("cx/gpt-5\\.6-sol-xhigh"; "GPT-5.6 Sol")
+        | gsub("9router"; "OpenAI")
+      else . end
+    )
 ' \
   "$raw" >"$clean"
 

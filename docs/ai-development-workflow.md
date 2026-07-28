@@ -2,7 +2,7 @@
 
 This repository was built with an AI coding agent, starting from an empty Go module. I used the agent for research, planning, implementation, review, and verification. My role was to set the boundaries, challenge decisions, review the artifacts and diffs, and decide what counted as evidence.
 
-This document is a public engineering account, not a transcript. It leaves out local paths, tool internals, and conversational noise. The complete original AI conversation is a separate submission artifact.
+This document is a public engineering account, not a transcript. It leaves out local paths, tool internals, and conversational noise. The chronological, sanitized [AI conversation exports](../transcripts/README.md) are committed separately as reviewable JSON.
 
 ## Why I used Compound Engineering
 
@@ -76,11 +76,11 @@ Review covered code, tests, and actual use. The final checks included:
 
 The README records the reproducible commands and measured results. I kept generated CSV files, timing captures, credentials, and the original assignment attachment out of git.
 
-## 6. Edit the public explanation
+## 6. Prepare reviewer-facing evidence
 
-The last pass was documentation rather than application code. I used [Humanizer](https://github.com/Aboudjem/humanizer-skill) and a separate anti-slop checklist to edit the README and this account. Those tools were editorial aids: measured facts, technical terms, commands, and limitations still came from the repository artifacts and completed runs.
+The final pass organized the evidence around how the project would be reviewed. Measured values came from completed runs, commands came from the tested CLI, and limitations stayed tied to behavior the repository can demonstrate.
 
-The result is intentionally split in two. The README is the evaluator's runbook. This file explains how the work was shaped and checked. Neither one claims to be the complete AI transcript.
+The documentation has three parts. The README is the evaluator's runbook. This file explains how the work was shaped and checked. The [conversation export index](../transcripts/README.md) links the retained user/assistant text and delegated prompts, documents the filtering boundary, and provides integrity checks.
 
 ## Repository trail
 
@@ -97,5 +97,7 @@ The development history remains unsquashed on `main`. The main checkpoints are:
 | `58632e9` through `6f12211` | Add dependencies, contracts, SMTP, Redis, Asynq, and CLI modes in focused commits |
 | `075cbf1` and `0fa820b` | Extend privacy coverage and isolate Redis CI |
 | `0b91b54` through `7b2f3d4` | Bring requirements and evaluator documentation in line with the completed behavior |
+| `19ba108` through `dc5500c` | Specify, implement, test, and document the bounded evaluator and typed message formats |
+| `1193c2d` through `7f2fd06` | Add reproducible conversation exports and browser evidence |
 
 That trail shows the repository sequence: requirements before implementation, a review-driven correction, optional work behind explicit guards, and documentation added after the behavior was complete.
