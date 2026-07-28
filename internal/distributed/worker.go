@@ -14,7 +14,7 @@ import (
 	"github.com/irvankadhafi/personalized-email-pipeline/internal/testinbox"
 )
 
-type DeliveryFunc func(context.Context, []byte) testinbox.DeliveryResult
+type DeliveryFunc func(context.Context, campaign.RenderedMessage) testinbox.DeliveryResult
 
 type WorkerConfig struct {
 	Ledger  *Ledger
@@ -127,8 +127,8 @@ func (w *Worker) processRecord(ctx context.Context, payload TaskPayload, record 
 	recipient := campaign.Recipient{Ordinal: record.Ordinal, Email: record.Email, Name: record.Name}
 	if payload.Sink == TaskSinkDryRun {
 		sink := campaign.NewDigestSink()
-		result := campaign.Render(ctx, recipient, sink.Accept)
-		if result.Reason != "" {
+		message, _ := campaign.RenderMessage(recipient, payload.Format)
+		if err := sink.AcceptMessage(ctx, message); err != nil {
 			return &recordTaskError{ordinal: record.Ordinal, err: ErrUnavailable}
 		}
 		digest := sink.Digest()
@@ -145,13 +145,11 @@ func (w *Worker) processRecord(ctx context.Context, payload TaskPayload, record 
 	}
 	var delivery testinbox.DeliveryResult
 	var digest [sha256.Size]byte
-	result := campaign.Render(ctx, recipient, func(deliveryCtx context.Context, body []byte) error {
-		digest = sha256.Sum256(body)
-		delivery = w.deliver(deliveryCtx, body)
-		return delivery.Err
-	})
+	message, _ := campaign.RenderMessage(recipient, payload.Format)
+	digest = sha256.Sum256(message.Bytes())
+	delivery = w.deliver(ctx, message)
 	commit := CommitRequest{Ordinal: record.Ordinal, Work: w.now().Sub(started), Now: w.now()}
-	if result.Reason == "" && delivery.Status == testinbox.DeliveryConfirmed {
+	if delivery.Err == nil && delivery.Status == testinbox.DeliveryConfirmed {
 		commit.State = TerminalCompleted
 		commit.Digest = hex.EncodeToString(digest[:])
 	} else {

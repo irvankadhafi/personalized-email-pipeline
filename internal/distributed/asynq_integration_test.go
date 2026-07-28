@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	campaignpkg "github.com/irvankadhafi/personalized-email-pipeline/internal/campaign"
 	"github.com/irvankadhafi/personalized-email-pipeline/internal/testinbox"
 	"github.com/redis/go-redis/v9"
 )
@@ -111,7 +112,7 @@ func TestAsynqTestInboxRedeliveryAttemptsSMTPOnce(t *testing.T) {
 	var deliveries atomic.Int64
 	worker, err := NewWorker(WorkerConfig{
 		Ledger: ledger,
-		Deliver: func(context.Context, []byte) testinbox.DeliveryResult {
+		Deliver: func(context.Context, campaignpkg.RenderedMessage) testinbox.DeliveryResult {
 			deliveries.Add(1)
 			return testinbox.DeliveryResult{Status: testinbox.DeliveryConfirmed}
 		},
