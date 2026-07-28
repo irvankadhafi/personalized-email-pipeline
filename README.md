@@ -1,6 +1,6 @@
 # Personalized email pipeline
 
-This repository is a proof of concept for processing one million personalized promotional emails quickly and safely. The default command renders every message and consumes it through an in-memory SHA-256 sink. It does not contact an email server. Optional modes demonstrate bounded test-inbox delivery and Asynq/Redis execution without changing the default path.
+This repository processes one million personalized promotional emails quickly and safely as a proof of concept. The default command renders every message and consumes it through an in-memory SHA-256 sink. It does not contact an email server. Optional modes demonstrate bounded test-inbox delivery and Asynq/Redis execution without changing the default path.
 
 A recipient is complete only after the full personalized message has been rendered and accepted by the selected sink.
 
@@ -16,8 +16,8 @@ A recipient is complete only after the full personalized message has been render
 - [One-million-record proof](#one-million-record-proof)
 - [Optional execution modes](#optional-execution-modes)
 - [Test strategy and evidence](#test-strategy-and-evidence)
+- [AI-assisted development](#ai-assisted-development)
 - [Limitations](#limitations)
-- [Submission checklist](#submission-checklist)
 
 ## Assignment fit
 
@@ -30,7 +30,7 @@ The original task asks for a script or small page that handles a list of 1,000,0
 | Finish quickly | The reference run completed campaign processing in 3.123577 seconds on an Apple M3 Pro. Reproduction commands and machine details are documented below. |
 | Do not email real recipients | The default sink is local and network-free. Optional SMTP accepts only a generated fixture of at most 10 records, requires an exact confirmation token, and sends every message to one independently allowlisted test destination. Fixture addresses use the reserved `.test` domain and are never transport destinations. |
 | Provide working code | The repository contains the CLI, tests, CI workflow, deterministic test data, and repeatable benchmark commands. |
-| Provide all AI prompts | This is a separate submission artifact. It is intentionally not reconstructed or claimed by this README. Export the complete original AI conversations and submit them alongside the repository link. |
+| Provide all AI prompts | The complete conversation export is a separate submission artifact. The public [AI-assisted development notes](docs/ai-development-workflow.md) explain the workflow and decisions without pretending to replace that export. |
 
 The repository also covers malformed input, duplicates, cancellation, privacy-safe reports, partial failure, and optional distributed execution.
 
@@ -133,7 +133,7 @@ The run report includes these core fields. Timing and memory values vary by run,
 }
 ```
 
-The samples prove that both personalization branches ran, but they use synthetic fixture-derived labels instead of supplied recipient data or full message bodies. The complete message consumed by the sink has this shape:
+The samples show output from both personalization branches. The run counts and automated tests provide the corresponding execution evidence. Samples use synthetic fixture-derived labels instead of supplied recipient data or full message bodies. The complete message consumed by the sink has this shape:
 
 ```text
 Subject: Your exclusive offer
@@ -199,7 +199,7 @@ On Linux, use `/usr/bin/time -v` and read `Maximum resident set size (kbytes)`. 
 ### Reference measurement (2026-07-27)
 
 - Go: `go1.26.5 darwin/arm64`
-- Machine: Apple M3 Pro, 11 logical CPUs, 19,327,352,832 bytes physical memory
+- Machine: local Apple M3 Pro, 11 logical CPUs
 - Fixture: algorithm `v1`, seed `7`, 1,000,000 records, 500,000 named and 500,000 fallback
 - Fixture size/SHA-256: 55,500,012 bytes / `34c90f44002f2b0f7df2a5c937a03b4c7c5db6e3058ff401185f36ab62bb965c`
 - Generation: 0.304050 seconds; 11,665,408-byte maximum RSS
@@ -210,6 +210,22 @@ On Linux, use `/usr/bin/time -v` and read `Maximum resident set size (kbytes)`. 
 - OS maximum RSS: 249,872,384 bytes
 
 These figures are environment-specific evidence, not a hardware-independent SLA. Exact deduplication makes the normalized identity set the only input-sized structure.
+
+### Optional Docker benchmark environment
+
+`Dockerfile.bench` pins Go 1.26.5 on Debian Bookworm and builds the same CLI used by the local commands. It is useful when two machines need a comparable Linux toolchain. It is not a production image and is not required for development, CI, or the reference run above.
+
+```sh
+docker build -f Dockerfile.bench -t email-pipeline-bench .
+
+docker run --rm -v "$PWD:/data" email-pipeline-bench \
+  generate --output /data/assessment-1000000.csv --count 1000000 --seed 7
+
+docker run --rm -v "$PWD:/data" email-pipeline-bench \
+  run --input /data/assessment-1000000.csv
+```
+
+Docker removes toolchain drift, not hardware differences. Compare accounting and fixture hashes first; treat elapsed time as machine-specific.
 
 ## Optional execution modes
 
@@ -307,26 +323,18 @@ CI keeps the default job service-free, proves poisoned optional endpoints do not
 
 Re-run the commands above on the review machine and compare counts and accounting invariants rather than elapsed time.
 
+## AI-assisted development
+
+I built this project with an AI coding agent, but the work did not start with a request to generate the application. I first worked through the product boundaries and failure cases, reviewed the resulting requirements, and only then produced implementation plans. The code was implemented from those checked-in artifacts and followed by automated review, manual CLI exercises, Redis/SMTP integration checks, and a fresh one-million-record run.
+
+The full development account, including why I used Compound Engineering for this project and where I made manual decisions, is in [docs/ai-development-workflow.md](docs/ai-development-workflow.md). It is a readable, sanitized history. The complete original conversation remains a separate submission artifact.
+
 ## Limitations
 
-- The benchmark measures a proof of processing and sink acceptance, not provider delivery to one million inboxes.
-- The default sink hashes complete rendered messages instead of retaining them. This keeps memory bounded while proving the render path ran.
+- The benchmark measures processing and sink acceptance, not provider delivery to one million inboxes.
+- The default sink hashes complete rendered messages instead of retaining them. This keeps memory bounded while recording acceptance of each fully rendered message.
 - Email syntax checks are deliberately conservative and offline. The program does not verify mailbox existence or deliverability.
 - Exact deduplication retains normalized identities, so memory grows with the number of unique valid recipients.
 - SMTP delivery is limited to a deliberate test-inbox mode. The project does not implement campaign authoring, unsubscribe handling, scheduling, deliverability operations, or analytics.
 - Asynq is at least once. Redis application state makes accounting idempotent, while the SMTP reservation prevents automatic duplicate submission. An unresolved post-submission crash is reported as indeterminate rather than retried.
 - The recorded performance number is specific to Go 1.26.5 on an Apple M3 Pro.
-
-## Submission checklist
-
-The assignment requests two deliverables:
-
-1. Share this repository at the final `main` commit and confirm the link is publicly viewable.
-2. Export the complete AI conversations from the first prompt through the final response and attach them or share a public link.
-
-Before sending:
-
-- rerun the four quality-gate commands in [Test strategy and evidence](#test-strategy-and-evidence);
-- confirm `main` contains the complete commit history and the working tree is clean;
-- check that no credential, private recipient list, generated benchmark artifact, or confidential email attachment is committed;
-- include assumptions and measured environment details rather than presenting the PoC as a production email platform.
